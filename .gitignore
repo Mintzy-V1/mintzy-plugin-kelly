@@ -1,0 +1,63 @@
+# ==========================
+# Python
+# ==========================
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environment
+venv/
+.venv/
+env/
+
+# Environment Variables
+.env
+.env.*
+
+# IDE
+.vscode/
+.idea/
+
+# OS Files
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+
+# CSV Logs
+live_pnl_log.csv
+portfolio_pnl_log.csv
+portfolio_log.csv
+trade_log.csv
+rms_events_log.csv
+timing_log_*.csv
+
+# Screen Dumps
+screen.txt
+screen_dump_*.txt
+
+# Python Cache
+.pytest_cache/
+.mypy_cache/
+
+# Build Files
+build/
+dist/
+*.egg-info/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Temporary Files
+*.tmp
+*.swp
+
+# Secrets
+*.pem
+*.key
+
+# Local SQLite DB
+*.db
+*.sqlite3
