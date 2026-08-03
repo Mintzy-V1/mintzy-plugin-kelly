@@ -443,6 +443,27 @@ class AutoTrader:
         self.stop_event = threading.Event()
         self._exit_warning_sent = False
 
+        # ==================== LIVE RMS / TICK TRACKING ====================
+        self.live_pnl = {}
+        self.live_pnl_lock = threading.Lock()
+        self._tick_first_seen_in_trader = set()
+        self.realized_pnl_by_symbol = {}
+        self._live_pnl_last_write = {}
+        self._live_pnl_last_redis_write = 0.0
+        self._last_per_ticker_print_ts = {}
+        self._per_ticker_print_interval_sec = 30.0
+        self._last_portfolio_print_ts = 0.0
+        self._portfolio_print_interval_sec = 30.0
+        self._exited_symbols = set()
+        self._rms_exit_inflight = set()
+        self.rms_loss_limit = None
+        self.rms_per_ticker_loss_pct = 0.01
+        self._live_portfolio_rms_inflight = False
+        self.rms_triggered = False
+        self.live_pnl_log = os.path.join(self.log_dir, "live_pnl_log.csv")
+        self.portfolio_pnl_log = os.path.join(self.log_dir, "portfolio_pnl_log.csv")
+        self.rms_events_log = os.path.join(self.log_dir, "rms_events_log.csv")
+        # ==================================================================
 
         # ==================== PARALLEL EXECUTION SETUP ====================
         self.parallel_executor = None
@@ -473,6 +494,14 @@ class AutoTrader:
                     "Exit_Price", "P&L", "Cumulative_P&L", "Total_Capital",
                     "Return_On_Trade(%)", "Portfolio_Return(%)"
                 ])
+
+        for path, header in [
+            (self.live_pnl_log, ["Timestamp", "Symbol", "Side", "Qty", "Entry", "LTP", "PnL"]),
+            (self.portfolio_pnl_log, ["Timestamp", "Total_PnL", "Realized_PnL", "Live_Unrealized_PnL", "Limit", "Usage%", "Open_Syms"]),
+            (self.rms_events_log, ["Timestamp", "Event", "Symbol", "Total", "Realized", "Live", "Threshold", "Detail"]),
+        ]:
+            if not os.path.exists(path):
+                self._append_csv_row(path, header)
     
     
     # ---------- TIME HELPERS ----------
@@ -481,6 +510,232 @@ class AutoTrader:
         """Return current market datetime in IST."""
         return datetime.now(MARKET_TZ)
     
+    def _append_csv_row(self, path, row):
+        try:
+            with open(path, "a", newline="") as f:
+                csv.writer(f).writerow(row)
+        except Exception as e:
+            print(f"[CSV ERROR] {path}: {e}")
+
+    # ---------- LIVE LTP TICK (background WS thread) ----------
+    def on_ltp_tick(self, symbol: str, ltp: float, ts_epoch: float) -> None:
+        try:
+            pos = self.positions.get(symbol)
+            if not pos:
+                if symbol not in self._tick_first_seen_in_trader:
+                    self._tick_first_seen_in_trader.add(symbol)
+                    print(f"[TRADER-TICK] {symbol} tick received but no position yet (ltp={ltp:.2f})")
+                return
+
+            qty = int(pos.get("qty") or 0)
+            entry = float(pos.get("entry_price") or 0.0)
+            side = (pos.get("side") or "BUY").upper()
+            if qty <= 0 or entry <= 0:
+                return
+
+            pnl = (ltp - entry) * qty if side == "BUY" else (entry - ltp) * qty
+
+            with self.live_pnl_lock:
+                self.live_pnl[symbol] = {
+                    "ltp": ltp,
+                    "pnl": pnl,
+                    "qty": qty,
+                    "entry": entry,
+                    "side": side,
+                    "ts": ts_epoch,
+                }
+                last = self._live_pnl_last_write.get(symbol, 0.0)
+                write_row = ts_epoch - last >= 1.0
+                if write_row:
+                    self._live_pnl_last_write[symbol] = ts_epoch
+
+            if write_row:
+                self._append_csv_row(
+                    self.live_pnl_log,
+                    [
+                        datetime.fromtimestamp(ts_epoch).strftime("%Y-%m-%d %H:%M:%S"),
+                        symbol, side, qty, f"{entry:.2f}", f"{ltp:.2f}", f"{pnl:.2f}",
+                    ],
+                )
+
+            realized_for_sym = float(self.realized_pnl_by_symbol.get(symbol, 0.0))
+            total_for_sym = realized_for_sym + pnl
+            loss_threshold = -(self.rms_per_ticker_loss_pct * entry * qty)
+
+            now = time.time()
+            last_print = self._last_per_ticker_print_ts.get(symbol, 0.0)
+            if now - last_print >= self._per_ticker_print_interval_sec:
+                self._last_per_ticker_print_ts[symbol] = now
+                usage_pct = (total_for_sym / loss_threshold * 100.0) if loss_threshold else 0.0
+                print(
+                    f"[RMS-TICKER] {symbol} total={total_for_sym:.2f} "
+                    f"(realized={realized_for_sym:.2f} + unrealized={pnl:.2f}) "
+                    f"threshold={loss_threshold:.2f} usage={usage_pct:.1f}% qty={qty} side={side} ltp={ltp:.2f}"
+                )
+
+            if (total_for_sym <= loss_threshold and symbol not in self._exited_symbols and symbol not in self._rms_exit_inflight):
+                self._rms_exit_inflight.add(symbol)
+                print(
+                    f"[RMS-TICKER] {symbol} breached: total={total_for_sym:.2f} "
+                    f"(realized={realized_for_sym:.2f} + unrealized={pnl:.2f}) <= threshold={loss_threshold:.2f} (qty={qty}). Exiting."
+                )
+                self._append_csv_row(
+                    self.rms_events_log,
+                    [
+                        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "PER_TICKER_BREACH", symbol,
+                        f"{total_for_sym:.2f}", f"{realized_for_sym:.2f}", f"{pnl:.2f}", f"{loss_threshold:.2f}", f"EXIT_SINGLE qty={qty}",
+                    ],
+                )
+                self._notify_rms_exit_to_api(symbol, total_for_sym)
+                threading.Thread(target=self._rms_exit_worker, args=(symbol,), name=f"RMSExit-{symbol}", daemon=True).start()
+
+            self._check_live_portfolio_rms()
+
+            if now - self._live_pnl_last_redis_write >= 1.0:
+                self._live_pnl_last_redis_write = now
+                self._push_live_pnl_to_redis()
+        except Exception as e:
+            print(f"[LIVE-PNL] tick handler error for {symbol}: {e}")
+
+    def _push_live_pnl_to_redis(self) -> None:
+        try:
+            sid = getattr(self, "session_id", None) or getattr(self, "ui_session_id", None)
+            rc = getattr(self.market_client, "redis_client", None)
+            if not sid or rc is None:
+                return
+
+            with self.live_pnl_lock:
+                live_snapshot = dict(self.live_pnl)
+
+            realized_by_sym = dict(self.realized_pnl_by_symbol)
+            all_symbols = set(live_snapshot.keys()) | set(realized_by_sym.keys())
+            symbols_out = {}
+            live_unrealized_total = 0.0
+
+            for sym in all_symbols:
+                live = live_snapshot.get(sym, {})
+                unrealized = round(float(live.get("pnl", 0.0)), 2)
+                realized = round(float(realized_by_sym.get(sym, 0.0)), 2)
+                live_unrealized_total += unrealized
+                symbols_out[sym] = {
+                    "ltp": round(float(live.get("ltp", 0.0)), 2),
+                    "unrealized_pnl": unrealized,
+                    "realized_pnl": realized,
+                    "total_pnl": round(unrealized + realized, 2),
+                    "qty": int(live.get("qty", 0)),
+                    "entry": round(float(live.get("entry", 0.0)), 2),
+                    "side": live.get("side", ""),
+                }
+
+            realized_total = round(float(self.realized_pnl), 2)
+            live_unrealized_total = round(live_unrealized_total, 2)
+            payload = {
+                "realized_pnl": realized_total,
+                "live_unrealized_pnl": live_unrealized_total,
+                "total_pnl": round(realized_total + live_unrealized_total, 2),
+                "symbols": symbols_out,
+                "ts": time.time(),
+            }
+            rc.setex(f"live_pnl:{sid}", 5, json.dumps(payload))
+        except Exception as e:
+            print(f"[LIVE-PNL] Redis push error: {e}")
+
+    def _check_realized_portfolio_rms(self) -> None:
+        if self.rms_loss_limit is None or self.rms_loss_limit >= 0:
+            return
+        total_realized = float(self.realized_pnl or 0.0)
+        if total_realized > self.rms_loss_limit:
+            return
+        self._csv_logger = getattr(self, "_csv_logger", None)
+        if not self._live_portfolio_rms_inflight and not self.rms_triggered:
+            self._live_portfolio_rms_inflight = True
+            self.rms_triggered = True
+            self._append_csv_row(self.rms_events_log, [datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "REALIZED_PORTFOLIO_BREACH", "ALL", f"{total_realized:.2f}", f"{total_realized:.2f}", "0.00", f"{self.rms_loss_limit:.2f}", "EXIT_ALL realized_only"])
+            try:
+                self.alerts.notify(f"RMS realized portfolio halt: {total_realized:.2f}")
+            except Exception:
+                pass
+            threading.Thread(target=lambda: self._exit_all_positions_and_stop(), name="RMSRealizedPortfolioExit", daemon=True).start()
+
+    def _check_live_portfolio_rms(self) -> None:
+        if self.rms_loss_limit is None or self.rms_loss_limit >= 0:
+            return
+        if self._live_portfolio_rms_inflight or self.rms_triggered:
+            return
+        with self.live_pnl_lock:
+            total_live_pnl = sum(float(v.get("pnl") or 0.0) for v in self.live_pnl.values())
+            symbols_snapshot = list(self.live_pnl.keys())
+        total_realized = float(self.realized_pnl or 0.0)
+        total_pnl = total_realized + total_live_pnl
+        now = time.time()
+        if now - self._last_portfolio_print_ts >= self._portfolio_print_interval_sec:
+            self._last_portfolio_print_ts = now
+            self._append_csv_row(self.portfolio_pnl_log, [datetime.now().strftime("%Y-%m-%d %H:%M:%S"), f"{total_pnl:.2f}", f"{total_realized:.2f}", f"{total_live_pnl:.2f}", f"{self.rms_loss_limit:.2f}", f"{(total_pnl / self.rms_loss_limit * 100.0) if self.rms_loss_limit else 0.0:.2f}", len(symbols_snapshot)])
+        if total_pnl > self.rms_loss_limit:
+            return
+        self._live_portfolio_rms_inflight = True
+        self.rms_triggered = True
+        self._append_csv_row(self.rms_events_log, [datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "PORTFOLIO_BREACH", "ALL", f"{total_pnl:.2f}", f"{total_realized:.2f}", f"{total_live_pnl:.2f}", f"{self.rms_loss_limit:.2f}", f"EXIT_ALL syms={len(symbols_snapshot)}"])
+        try:
+            self.alerts.notify(f"RMS live portfolio halt: {total_pnl:.2f}")
+        except Exception:
+            pass
+        threading.Thread(target=lambda: self._exit_all_positions_and_stop(), name="RMSLivePortfolioExit", daemon=True).start()
+
+    def _rms_exit_worker(self, symbol: str) -> None:
+        try:
+            self._exit_single_position_for_rms(symbol)
+        except Exception as e:
+            print(f"[RMS-TICKER] exit failed for {symbol}: {e}")
+        finally:
+            self._rms_exit_inflight.discard(symbol)
+
+    def _exit_single_position_for_rms(self, symbol: str) -> None:
+        if symbol not in self.positions:
+            self._exited_symbols.add(symbol)
+            return
+        pos = self.positions.get(symbol, {})
+        qty = int(pos.get("qty") or 0)
+        side = (pos.get("side") or "BUY").upper()
+        if qty <= 0:
+            self._exited_symbols.add(symbol)
+            return
+        exit_side = "SELL" if side == "BUY" else "BUY"
+        self._ensure_session()
+        self._ensure_parallel_executor()
+        order = OrderRequest(
+            symbol=symbol,
+            side=exit_side,
+            qty=qty,
+            metadata={
+                "signal": "RMS_TICKER_EXIT",
+                "action_type": "STOP_LOSS",
+                "curr_price": self.live_pnl.get(symbol, {}).get("ltp", 0.0),
+                "side": exit_side,
+                "qty": qty,
+                "order_value": (self.live_pnl.get(symbol, {}).get("ltp", 0.0) or 0.0) * qty,
+                "original_side": side,
+            },
+        )
+        results = self.parallel_executor.submit_orders([order])
+        if results and results[0].success:
+            self._exited_symbols.add(symbol)
+            print(f"[RMS-TICKER] exit order submitted for {symbol}")
+        else:
+            print(f"[RMS-TICKER] exit order failed for {symbol}: {results[0].error if results else 'no result'}")
+
+    def _notify_rms_exit_to_api(self, symbol: str, pnl: float) -> None:
+        try:
+            sid = getattr(self, "session_id", None) or getattr(self, "ui_session_id", None)
+            rc = getattr(self.market_client, "redis_client", None)
+            if not sid or rc is None:
+                return
+            rc.rpush(f"autotrader:rms_exited:{sid}", json.dumps({"symbol": symbol, "pnl": pnl, "ts": time.time()}))
+            rc.expire(f"autotrader:rms_exited:{sid}", 86400)
+        except Exception as e:
+            print(f"[RMS-TICKER] redis notify failed for {symbol}: {e}")
+
     # ---------- SYMBOL LOCK (thread-safe exposure updates) -----------
     
     def _get_symbol_lock(self, symbol):
@@ -1504,6 +1759,7 @@ class AutoTrader:
             "cash_balance": round(self.cash_balance, 2),
             "realized_pnl": round(self.realized_pnl, 2),
             "unrealized_pnl": round(self.unrealized_pnl, 2),
+            "pnl": round(self.realized_pnl + self.unrealized_pnl, 2),
             "total_equity": round(
                 self.cash_balance + self.realized_pnl + self.unrealized_pnl, 2
             ),
@@ -1797,7 +2053,9 @@ class AutoTrader:
             pass
 
         self.realized_pnl += profit
+        self.realized_pnl_by_symbol[symbol] = self.realized_pnl_by_symbol.get(symbol, 0.0) + profit
         self.positions.pop(symbol, None)
+        self._check_realized_portfolio_rms()
 
         return profit
     
@@ -2826,6 +3084,10 @@ class AutoTrader:
                     elif has_broker_pos:
                         self._log_trade(sym, sig, change_pct, "hold", curr_price, held_qty, live_pnl)
        
+                    symbol_unrealized_pnl = round(live_pnl, 2)
+                    symbol_realized_pnl = round(float(self.realized_pnl_by_symbol.get(sym, 0.0)), 2)
+                    symbol_pnl = round(symbol_realized_pnl + symbol_unrealized_pnl, 2)
+
                     ui_rows.append({
                         "symbol": sym,
                         "curr_price": round(curr_price, 2),
@@ -2833,7 +3095,11 @@ class AutoTrader:
                         "side": side,
                         "signal": sig,
                         "action": action_taken,
-                        "unrealized_pnl": round(self._calculate_pnl(sym, curr_price), 2),
+                        "unrealized_pnl": symbol_unrealized_pnl,
+                        "symbol_unrealized_pnl": symbol_unrealized_pnl,
+                        "symbol_realized_pnl": symbol_realized_pnl,
+                        "symbol_pnl": symbol_pnl,
+                        "pnl": symbol_pnl,
                     })
                     
                     print(f"{sym:<10} {curr_price:>12.2f} {change_pct:>12.6f} "
