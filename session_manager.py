@@ -19,7 +19,8 @@ from broker_angle import BrokerConnector
 from live_ltp_ws import LiveLTPStream
 import signal
 
-
+SIMULATION_STOP_PREFIX = "autotrader:simulation_stop:"
+SIMULATION_STOP_TTL = 300
 
 
 
@@ -58,7 +59,8 @@ def _trader_worker(
     stop_event: Event,
     health_queue: Queue,
     mongo_uri: str,
-    mongo_db_name: str
+    mongo_db_name: str,
+    configuration_id: Optional[str] = None,
 ):
     """
     Worker process that runs a single AutoTrader instance.
@@ -98,19 +100,39 @@ def _trader_worker(
         mongo_client = MongoClient(mongo_uri, serverSelectionTimeoutMS=5000)
         mongo_db = mongo_client[mongo_db_name]
         trading_logs_collection = mongo_db[trading_logs_collection_name]
+        config_db_name = os.environ.get("MONGO_CONFIG_DB_NAME", mongo_db_name)
+        if config_db_name != mongo_db_name:
+            print(
+                f"[Worker-{session_id}] SavedTradingConfiguration DB: {config_db_name} "
+                f"(sessions/logs: {mongo_db_name})"
+            )
         
         # Initialize clients
         prediction_client = PredictionClient(
             api_key="XeyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9",
-            base_url="http://54.204.215.28:8000/predict"
+            base_url=os.environ.get("PREDICTION_BASE_URL", "http://54.204.215.28:8000/predict")
         )
         market_client = MarketClient()
         
         # Redis client for inter-process messaging (single-symbol exit requests)
         exit_redis_client = getattr(market_client, 'redis_client', None)
         
-        # Select trader class
+        # Select trader class (C is lazy-imported so api_server boots even if org module differs on disk)
         TRADER_MAP = {"A": AutoTraderA, "B": AutoTraderB}
+        if strategy == "C":
+            try:
+                from auto_trader_exposure_expansion_org import AutoTrader as AutoTraderC
+                TRADER_MAP["C"] = AutoTraderC
+            except ImportError as e:
+                health_queue.put({
+                    "session_id": session_id,
+                    "status": "error",
+                    "error": (
+                        f"Strategy C (auto_trader_exposure_expansion_org) unavailable: {e}. "
+                        "Ensure auto_trader_exposure_expansion_org.py defines class AutoTrader."
+                    ),
+                })
+                return
         TraderClass = TRADER_MAP.get(strategy)
         
         if not TraderClass:
@@ -129,6 +151,7 @@ def _trader_worker(
             alerts=AlertManager(),
             trading_logs_collection=trading_logs_collection
         )
+        trader.config_db_name = config_db_name
         
         # Configure trader
         trader.session_id = session_id
@@ -136,6 +159,7 @@ def _trader_worker(
         trader.ui_session_id = session_id
         trader.symbol_allocations = {k: v["capital"] for k, v in allocations.items()}
         trader.initial_allocations = allocations
+        trader.configuration_id = configuration_id
         
         # Signal that we're healthy and starting
         health_queue.put({
@@ -221,29 +245,60 @@ def _trader_worker(
                 print(f"[Worker-{session_id}] LiveLTPStream stop error: {e}")
 
 
-        
-        health_queue.put({
-            "session_id": session_id,
-            "status": "stopped",
-            "timestamp": time.time()
-        })
-
+        simulation_stop = False
         try:
-            sessions_collection = mongo_db["plugin_sessions"]
-            sessions_collection.update_one(
-                {"session_id": session_id},
-                {
-                    "$set": {
-                        "status": "stopped",
-                        "trading_status": "stopped",
-                        "stopped_at": datetime.utcnow(),
-                        "last_updated": datetime.utcnow()
-                    }
-                }
-            )
-            print(f"[Worker-{session_id}] Session status marked stopped in Mongo")
+            if exit_redis_client:
+                sim_key = f"{SIMULATION_STOP_PREFIX}{session_id}"
+                simulation_stop = bool(exit_redis_client.get(sim_key))
+                if simulation_stop:
+                    exit_redis_client.delete(sim_key)
         except Exception as e:
-            print(f"[Worker-{session_id}] Failed to mark session stopped in Mongo: {e}")
+            print(f"[Worker-{session_id}] Simulation stop flag check error: {e}")
+
+        if simulation_stop:
+            health_queue.put({
+                "session_id": session_id,
+                "status": "simulation_stopped",
+                "timestamp": time.time()
+            })
+            try:
+                sessions_collection = mongo_db["plugin_sessions"]
+                sessions_collection.update_one(
+                    {"session_id": session_id},
+                    {
+                        "$set": {
+                            "trading_status": "simulation_stopped",
+                            "simulation_stopped_at": datetime.utcnow(),
+                            "last_updated": datetime.utcnow()
+                        }
+                    }
+                )
+                print(f"[Worker-{session_id}] Simulation stopped in Mongo (session auth unchanged)")
+            except Exception as e:
+                print(f"[Worker-{session_id}] Failed to mark simulation stopped in Mongo: {e}")
+        else:
+            health_queue.put({
+                "session_id": session_id,
+                "status": "stopped",
+                "timestamp": time.time()
+            })
+
+            try:
+                sessions_collection = mongo_db["plugin_sessions"]
+                sessions_collection.update_one(
+                    {"session_id": session_id},
+                    {
+                        "$set": {
+                            "status": "stopped",
+                            "trading_status": "stopped",
+                            "stopped_at": datetime.utcnow(),
+                            "last_updated": datetime.utcnow()
+                        }
+                    }
+                )
+                print(f"[Worker-{session_id}] Session status marked stopped in Mongo")
+            except Exception as e:
+                print(f"[Worker-{session_id}] Failed to mark session stopped in Mongo: {e}")
         
         # Cleanup
         mongo_client.close()
@@ -279,10 +334,26 @@ class SessionManager:
         """Convenience accessor for MarketClient's Redis connection."""
         return cls._market_client.redis_client
 
-    REDIS_KEY_PREFIX = "autotrader:session:" 
+    REDIS_KEY_PREFIX = "autotrader:session:"
+    SIMULATION_STOP_PREFIX = SIMULATION_STOP_PREFIX
+    SIMULATION_STOP_TTL = SIMULATION_STOP_TTL
 
+    @classmethod
+    def _simulation_stop_key(cls, session_id: str) -> str:
+        return f"{cls.SIMULATION_STOP_PREFIX}{session_id}"
 
-    
+    @classmethod
+    def _mark_simulation_stop(cls, session_id: str) -> None:
+        try:
+            cls._redis().setex(
+                cls._simulation_stop_key(session_id),
+                cls.SIMULATION_STOP_TTL,
+                "1",
+            )
+            print(f"[SessionManager] Simulation stop flag set for {session_id}")
+        except Exception as e:
+            print(f"[SessionManager] Failed to set simulation stop flag: {e}")
+
     # Configuration
     MAX_WORKERS = int(os.environ.get("MAX_TRADER_WORKERS", "6"))  # Limit concurrent processes
     HEALTH_CHECK_INTERVAL = 30  # seconds
@@ -313,6 +384,8 @@ class SessionManager:
                                     print(f"[SessionManager] Worker {session_id} reported error: {msg.get('error')}")
                                 elif status == "stopped":
                                     print(f"[SessionManager] Worker {session_id} stopped gracefully")
+                                elif status == "simulation_stopped":
+                                    print(f"[SessionManager] Worker {session_id} simulation stopped (session auth kept)")
                         
                         except Empty:
                             break
@@ -416,6 +489,7 @@ class SessionManager:
         
         time_frame = session_doc.get("time_frame", "5 minutes")
         candle = session_doc.get("candle", "5m")
+        configuration_id = session_doc.get("configuration_id")
         
         # Prepare broker config
         broker_config = {
@@ -450,7 +524,8 @@ class SessionManager:
                 stop_event,
                 cls._health_queue,
                 mongo_uri,
-                mongo_db_name
+                mongo_db_name,
+                configuration_id,
             ),
             daemon=False  # Not daemon - we want proper cleanup
         )
@@ -586,6 +661,16 @@ class SessionManager:
         cls._workers.pop(session_id, None)
         print(f"[SessionManager] Ã¢Å“â€¦ Session {session_id} stopped")
         return True
+
+    @classmethod
+    def stop_simulation_session(cls, session_id: str):
+        """
+        Stop the paper/simulation worker without marking the session as stopped.
+        Sets a Redis flag so the worker exit handler keeps status=authenticated in Mongo.
+        """
+        print(f"[SessionManager] Simulation stop request: '{session_id}'")
+        cls._mark_simulation_stop(session_id)
+        return cls.stop_session(session_id)
     
     @classmethod
     def exit_symbol_for_session(cls, session_id: str, symbol: str) -> dict:

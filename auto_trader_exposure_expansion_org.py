@@ -6,7 +6,9 @@ import json
 import requests
 from datetime import datetime, time as dt_time, timedelta, timezone
 from alerts import AlertManager
+from broker_angle import BrokerConnector
 import numpy as np
+from orderbook import fetch_todays_intraday_orders
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
@@ -25,25 +27,6 @@ from trading_state import trading_snapshot
 
 print("TRADER snapshot id:", id(trading_snapshot))
 
-
-# ==================== CAPITAL PYRAMID (STOP TRADING) ====================
-SAVED_TRADING_CONFIGURATION_COLLECTION = "SavedTradingConfiguration"
-
-PYRAMID_MULTIPLIERS = {
-    1: 1.45,
-    2: 1.35,
-    3: 1.25,
-    4: 1.15,
-    5: 1.10,
-}
-
-
-def pyramid_multiplier_for_rank(rank) -> Optional[float]:
-    try:
-        rank_key = int(rank)
-    except (TypeError, ValueError):
-        return None
-    return PYRAMID_MULTIPLIERS.get(rank_key)
 
 
 # ==================== TIMING LOGGER ====================
@@ -168,13 +151,13 @@ class RateLimiter:
 
 
 class ParallelOrderExecutor:   
-    def __init__(self, trader, session, 
+    def __init__(self, broker, session, 
                  max_workers: int = 5,
                  order_rate_limit: int = 10,
                  order_rate_window: float = 1.0,
                  status_rate_limit: int = 20,
                  status_rate_window: float = 1.0):
-        self.trader = trader
+        self.broker = broker
         self.session = session
         self.max_workers = max_workers
         
@@ -228,7 +211,18 @@ class ParallelOrderExecutor:
                 f"trigger={order_req.trigger_price}"
             )
             
-            order_response = self.trader._create_paper_order(order_req)
+            order_response = self.broker.place_order(
+                session=self.session,
+                symbol=order_req.symbol,
+                side=order_req.side,
+                qty=order_req.qty,
+                order_type=order_req.order_type,
+                product_type=order_req.product_type,
+                price=order_req.price,
+                stop_loss=order_req.stop_loss,
+                trigger_price=order_req.trigger_price,
+                wait_for_confirmation=False
+            )
             
             print("\n[EXECUTOR] place_order raw response:")
             print(order_response)
@@ -256,23 +250,15 @@ class ParallelOrderExecutor:
                     metadata=order_req.metadata
                 )
             
-            # Paper orders fill synchronously in _create_paper_order — report filled
-            # immediately so we skip pending_orders + duplicate reconcile snapshots.
-            fill_price = float(order_response.get("avg_fill_price") or 0.0)
-            filled_qty = int(order_response.get("filled_qty") or order_req.qty or 0)
-            if fill_price <= 0 and order_id:
-                with self.trader._paper_lock:
-                    paper_order = self.trader._paper_orders.get(str(order_id), {})
-                fill_price = float(paper_order.get("avg_fill_price") or 0.0)
-                filled_qty = int(paper_order.get("filled_qty") or filled_qty)
-
+            #  PHASE A: fire-and-forget  return immediately, reconciler checks status
+            # orderBook() is intentionally NOT called here  reconcile thread handles it
             return OrderResult(
                 symbol=order_req.symbol,
-                success=True,
+                success=True,          
                 order_id=order_id,
-                filled=True,
-                avg_price=fill_price,
-                filled_qty=filled_qty,
+                filled=False,          
+                avg_price=0.0,
+                filled_qty=0,
                 error=None,
                 metadata=order_req.metadata
             )
@@ -500,33 +486,18 @@ class AutoTrader:
         self._last_executed_candle = None
         self.pred_client = prediction_client
         self.market_client = market_client
+        self.broker = broker
         self.alerts = alerts if alerts is not None else AlertManager()
         self.initial_capital = initial_capital
         self.current_capital = initial_capital
         self.cash_balance = initial_capital
         self.get_access_token = get_access_token
         self.trading_logs_collection = trading_logs_collection
-        self.config_db_name = (
-            os.environ.get("MONGO_CONFIG_DB_NAME")
-            or (trading_logs_collection.database.name if trading_logs_collection is not None else None)
-        )
         self.max_exposure_pct = 1.00
         self.reserved_exposure = {}  
         self.symbol_locks = {}        
         self.broker_pos_lock = threading.Lock()
         self._broker_positions_cache = []
-
-        # ==================== PAPER TRADING STATE ====================
-        self._paper_orders = {}
-        self._paper_positions = {}
-        self._paper_lock = threading.Lock()
-        self._paper_order_counter = 0
-        self.paper_slippage_pct = 0.0  # configurable later; 0 = no slippage
-        self._restored_cycle_count = 0
-        self._current_cycle_count = 0
-        self.session = None
-        self.configuration_id = None
-        # =============================================================
         # ====== CANDLE TIMESTAMP (for correct logging) ======
         self.current_cycle_ts = None
         self.current_cycle_ts_str = None
@@ -692,9 +663,6 @@ class AutoTrader:
                     "side": side,
                     "ts": ts_epoch,
                 }
-            with self._paper_lock:
-                if symbol in self._paper_positions:
-                    self._paper_positions[symbol]["ltp"] = ltp
                 last = self._live_pnl_last_write.get(symbol, 0.0)
                 if ts_epoch - last >= 1.0:
                     self._live_pnl_last_write[symbol] = ts_epoch
@@ -1115,33 +1083,81 @@ class AutoTrader:
 
     def _get_fill_price_from_orderbook(self, order_id, symbol):
         try:
-            with self._paper_lock:
-                order = self._paper_orders.get(str(order_id))
-            if not order:
-                print(f"[FILL PRICE] {symbol}: order {order_id} not found in paper book")
+            ob = self.session["obj"].orderBook()
+
+            if not isinstance(ob, dict):
+                return 0.0
+            if not ob.get("status"):
                 return 0.0
 
-            order_status = str(order.get("status") or order.get("orderstatus") or "").lower()
-            if order_status == "cancelled":
-                print(f"[FILL PRICE] {symbol}: order {order_id} CANCELLED")
-                return 0.0
-            if order_status == "rejected":
-                print(f"[FILL PRICE] {symbol}: order {order_id} REJECTED")
-                return 0.0
-            if order_status not in ("complete", "filled"):
-                print(f"[FILL PRICE] {symbol}: order {order_id} still {order_status}")
+            orders = ob.get("data", [])
+            if not isinstance(orders, list):
                 return 0.0
 
-            avg_price_field = float(order.get("avg_fill_price") or order.get("averageprice") or 0.0)
-            filled_shares = int(order.get("filled_qty") or order.get("filledshares") or 0)
-            if avg_price_field > 0 and filled_shares > 0:
-                print(f"[FILL PRICE] {symbol}: paper fill @ {avg_price_field:.2f} ({filled_shares} shares)")
-                return avg_price_field
-            print(f"[FILL PRICE] {symbol}: paper order complete but price/qty missing")
+            for order in orders:
+                if str(order.get("orderid")) != str(order_id):
+                    continue
+
+                #  Pehle orderstatus check karo
+                order_status = order.get("orderstatus", "").lower()
+
+                if order_status == "cancelled":
+                    print(f"[FILL PRICE] {symbol}: order {order_id} CANCELLED hai  fill price nahi milegi")
+                    return 0.0
+
+                if order_status == "rejected":
+                    print(f"[FILL PRICE] {symbol}: order {order_id} REJECTED hai  fill price nahi milegi")
+                    return 0.0
+
+                if order_status not in ("complete", "filled"):
+                    # open, pending, trigger pending etc.
+                    print(f"[FILL PRICE] {symbol}: order {order_id} abhi {order_status} hai  wait karo")
+                    return 0.0
+
+                #  Order complete hai  ab averageprice lo
+                # fill_price = float(order.get("averageprice") or 0.0)
+
+                #  Order complete hai  ab averageprice lo
+                # fill_price = float(order.get("price") or 0.0)
+                # avg_price_field = float(order.get("averageprice") or 0.0)
+
+                #  averageprice = actual execution price (AngelOne dashboard bhi yahi use karta hai)
+                avg_price_field = float(order.get("averageprice") or 0.0)
+                fill_price = float(order.get("price") or 0.0)
+            
+                print(
+                    f"[FILL PRICE] {symbol}: order {order_id} | "
+                    f"price={fill_price:.2f} | averageprice={avg_price_field:.2f}"
+                )
+
+                #  filledshares bhi check karo
+                filled_shares = int(order.get("filledshares") or 0)
+
+                # if fill_price > 0 and filled_shares > 0:
+                #         print(f"[FILL PRICE] {symbol}: order {order_id} complete @ Ãƒâ€šÃ‚Â¹{fill_price:.2f} (price field) | averageprice=Ãƒâ€šÃ‚Â¹{avg_price_field:.2f} ({filled_shares} shares)")
+                #         return fill_price
+                # elif avg_price_field > 0 and filled_shares > 0:
+                #         print(f"[FILL PRICE] {symbol}: price=0 fallback to averageprice=Ãƒâ€šÃ‚Â¹{avg_price_field:.2f}")
+                #         return avg_price_field
+                # else:
+                #         print(f"[FILL PRICE] {symbol}: order complete but both price=0 and averageprice=0 or filledshares=0")
+                #         return 0.0
+                if avg_price_field > 0 and filled_shares > 0:
+                    print(f"[FILL PRICE] {symbol}: averageprice=Ãƒâ€šÃ‚Â¹{avg_price_field:.2f} ({filled_shares} shares)")
+                    return avg_price_field
+                elif fill_price > 0 and filled_shares > 0:
+                    print(f"[FILL PRICE] {symbol}: averageprice=0, fallback to price=Ãƒâ€šÃ‚Â¹{fill_price:.2f}")
+                    return fill_price
+                else:
+                    print(f"[FILL PRICE] {symbol}: both 0 or filledshares=0")
+                    return 0.0
+
+            print(f"[FILL PRICE] {symbol}: order {order_id} order book mein nahi mila")
             return 0.0
+
         except Exception as e:
             print(f"[FILL PRICE ERROR] {symbol}: {e}")
-            return 0.0
+            return 0.0   
     
     # ------- HANDLE FILLED -------- 
 
@@ -1186,7 +1202,6 @@ class AutoTrader:
                     exit_qty,
                     pnl
                 )
-                self._persist_paper_state_snapshot(event=f"exit:{symbol}")
                 return
             elif action_type in ("EXIT_LONG", "COVER_SHORT", "STOP_LOSS", "MARKET_CLOSE_EXIT"):
                 # Missing price/position for normal exit
@@ -1244,625 +1259,36 @@ class AutoTrader:
             f"[POSITION SET] {symbol}: "
             f"{broker_pos['side']} {broker_pos['qty']} @ Ãƒâ€šÃ‚Â¹{entry_price:.2f}"
         )
-        self._persist_paper_state_snapshot(event=f"entry:{symbol}")
                
     # -------- HANDLE REJECTED ---------
 
     def _handle_rejected(self, symbol, ctx):
         print(f" {symbol}: ORDER REJECTED / CANCELLED ({ctx.get('action_type')})")
 
-    # ---------- PAPER TRADING ENGINE ----------
-
-    def _apply_paper_slippage(self, side: str, ltp: float) -> float:
-        slip = float(getattr(self, "paper_slippage_pct", 0.0) or 0.0)
-        if slip <= 0 or ltp <= 0:
-            return ltp
-        side = (side or "").upper()
-        if side == "BUY":
-            return ltp * (1.0 + slip)
-        if side == "SELL":
-            return ltp * (1.0 - slip)
-        return ltp
-
-    def _resolve_paper_ltp(self, symbol: str, order_req: Optional[OrderRequest] = None) -> float:
-        symbol = symbol.upper().replace("-EQ", "")
-        with self.live_pnl_lock:
-            tick = self.live_pnl.get(symbol)
-            if tick and float(tick.get("ltp") or 0) > 0:
-                return float(tick["ltp"])
-
-        cache = getattr(self, "_cycle_ltp_cache", {}) or {}
-        cached = cache.get(symbol)
-        if cached is not None and float(cached) > 0:
-            return float(cached)
-
-        candle = getattr(self, "_current_candle", "5m")
-        live = self._get_live_price_redis(symbol, candle)
-        if live is not None and float(live) > 0:
-            return float(live)
-
-        if order_req and order_req.metadata:
-            curr_price = order_req.metadata.get("curr_price")
-            if curr_price is not None and float(curr_price) > 0:
-                return float(curr_price)
-
-        with self._paper_lock:
-            pos = self._paper_positions.get(symbol)
-            if pos and float(pos.get("ltp") or 0) > 0:
-                return float(pos["ltp"])
-
-        return 0.0
-
-    def _update_paper_positions_on_fill(self, order_req: OrderRequest, fill_price: float) -> None:
-        symbol = order_req.symbol.upper().replace("-EQ", "")
-        side = order_req.side.upper()
-        qty = int(order_req.qty or 0)
-        meta = order_req.metadata or {}
-        action = meta.get("action_type", "")
-        ltp = float(fill_price or 0.0)
-
-        exit_actions = {
-            "EXIT_LONG", "COVER_SHORT", "STOP_LOSS", "MARKET_CLOSE_EXIT",
-            "SINGLE_EXIT",
-        }
-        flip_actions = {"FLIP_TO_LONG", "FLIP_TO_SHORT"}
-
-        pos = self._paper_positions.get(symbol)
-
-        if action in flip_actions:
-            new_qty = max(qty // 2, 0)
-            if new_qty <= 0:
-                self._paper_positions.pop(symbol, None)
-                return
-            new_side = "BUY" if action == "FLIP_TO_LONG" else "SELL"
-            self._paper_positions[symbol] = {
-                "symbol": symbol,
-                "side": new_side,
-                "qty": new_qty,
-                "avg_price": ltp,
-                "ltp": ltp,
-            }
-            return
-
-        if action in exit_actions or (
-            pos and (
-                (pos["side"] == "BUY" and side == "SELL") or
-                (pos["side"] == "SELL" and side == "BUY")
-            )
-        ):
-            if not pos:
-                return
-            remaining = int(pos["qty"]) - qty
-            if remaining <= 0:
-                self._paper_positions.pop(symbol, None)
-            else:
-                pos["qty"] = remaining
-                pos["ltp"] = ltp
-            return
-
-        if pos and pos["side"] == side:
-            old_qty = int(pos["qty"])
-            old_avg = float(pos["avg_price"])
-            new_qty = old_qty + qty
-            pos["avg_price"] = ((old_qty * old_avg) + (qty * ltp)) / new_qty
-            pos["qty"] = new_qty
-            pos["ltp"] = ltp
-            return
-
-        self._paper_positions[symbol] = {
-            "symbol": symbol,
-            "side": side,
-            "qty": qty,
-            "avg_price": ltp,
-            "ltp": ltp,
-        }
-
-    def _create_paper_order(self, order_req: OrderRequest) -> dict:
-        symbol = order_req.symbol.upper().replace("-EQ", "")
-        raw_ltp = self._resolve_paper_ltp(symbol, order_req)
-        fill_price = self._apply_paper_slippage(order_req.side, raw_ltp)
-
-        if fill_price <= 0:
-            return {
-                "status": "error",
-                "error": f"No market LTP available for {symbol}",
-            }
-
-        placed_at = datetime.now()
-        with self._paper_lock:
-            self._paper_order_counter += 1
-            order_id = f"PAPER-{self._paper_order_counter:08d}"
-            order_record = {
-                "order_id": order_id,
-                "orderid": order_id,
-                "symbol": symbol,
-                "side": order_req.side.upper(),
-                "qty": int(order_req.qty),
-                "order_type": order_req.order_type,
-                "product_type": order_req.product_type,
-                "price": fill_price,
-                "stop_loss": order_req.stop_loss,
-                "trigger_price": order_req.trigger_price,
-                "status": "complete",
-                "orderstatus": "complete",
-                "filled_qty": int(order_req.qty),
-                "filledshares": int(order_req.qty),
-                "avg_fill_price": fill_price,
-                "averageprice": fill_price,
-                "placed_at": placed_at,
-                "filled_at": placed_at,
-                "metadata": order_req.metadata,
-            }
-            self._paper_orders[order_id] = order_record
-            self._update_paper_positions_on_fill(order_req, fill_price)
-
-        # Keep self.positions in sync (PnL / tick handler use this dict).
-        with self.positions_lock:
-            paper_pos = self._paper_positions.get(symbol)
-            if paper_pos and int(paper_pos.get("qty") or 0) > 0:
-                self.positions[symbol] = {
-                    "side": paper_pos["side"],
-                    "qty": int(paper_pos["qty"]),
-                    "entry_price": float(paper_pos.get("avg_price") or fill_price),
-                }
-            else:
-                self.positions.pop(symbol, None)
-
-        print(
-            f"[PAPER-ORDER] {order_id} {order_req.side} {order_req.qty} {symbol} "
-            f"@ {fill_price:.2f} (LTP={raw_ltp:.2f})"
-        )
-        self._persist_paper_state_snapshot(event=f"order_fill:{order_id}")
-        return {
-            "order_id": order_id,
-            "status": "success",
-            "avg_fill_price": fill_price,
-            "filled_qty": int(order_req.qty),
-        }
-
-    def _get_paper_orders_for_tradebook(self) -> list:
-        with self._paper_lock:
-            orders = list(self._paper_orders.values())
-        rows = []
-        for o in orders:
-            rows.append({
-                "orderid": o.get("order_id"),
-                "tradingsymbol": o.get("symbol"),
-                "transactiontype": o.get("side"),
-                "quantity": o.get("qty"),
-                "averageprice": o.get("avg_fill_price"),
-                "orderstatus": o.get("status"),
-                "filledshares": o.get("filled_qty"),
-                "updatetime": (
-                    o.get("filled_at").strftime("%Y-%m-%d %H:%M:%S")
-                    if isinstance(o.get("filled_at"), datetime) else ""
-                ),
-            })
-        return rows
-
-    def _build_current_ui_rows(self) -> list:
-        rows = []
-        symbols = set(self.positions.keys()) | set(self._paper_positions.keys())
-        for sym in sorted(symbols):
-            paper_pos = self._paper_positions.get(sym)
-            internal_pos = self.positions.get(sym)
-            pos = paper_pos or internal_pos
-            if not pos:
-                continue
-            side = pos.get("side", "NONE")
-            qty = int(pos.get("qty") or 0)
-            if qty <= 0:
-                continue
-            # Prefer paper position for live LTP; fall back to entry_price on internal dict.
-            price_src = paper_pos or internal_pos
-            curr_price = float(
-                price_src.get("ltp")
-                or price_src.get("avg_price")
-                or price_src.get("entry_price")
-                or 0.0
-            )
-            cache = getattr(self, "_cycle_ltp_cache", {}) or {}
-            if sym in cache and float(cache[sym]) > 0:
-                curr_price = float(cache[sym])
-            live_pnl = self._calculate_pnl(sym, curr_price) if curr_price > 0 else 0.0
-            symbol_realized = round(float(self.realized_pnl_by_symbol.get(sym, 0.0)), 2)
-            symbol_unrealized = round(live_pnl, 2)
-            symbol_pnl = round(symbol_realized + symbol_unrealized, 2)
-            rows.append({
-                "symbol": sym,
-                "curr_price": round(curr_price, 2),
-                "return_pct": 0.0,
-                "side": side,
-                "signal": "PAPER",
-                "action": "HOLD (Paper)",
-                "qty": qty,
-                "unrealized_pnl": symbol_unrealized,
-                "symbol_unrealized_pnl": symbol_unrealized,
-                "symbol_realized_pnl": symbol_realized,
-                "symbol_pnl": symbol_pnl,
-                "pnl": symbol_pnl,
-            })
-        return rows
-
-    def _get_symbol_position_qty(self, symbol: str) -> int:
-        symbol = symbol.upper().replace("-EQ", "")
-        with self.positions_lock:
-            pos = self.positions.get(symbol)
-            if pos:
-                return int(pos.get("qty") or 0)
-        with self._paper_lock:
-            pos = self._paper_positions.get(symbol)
-            if pos:
-                return int(pos.get("qty") or 0)
-        return 0
-
-    def _get_symbol_unrealized_pnl(self, symbol: str) -> float:
-        symbol = symbol.upper().replace("-EQ", "")
-        with self.live_pnl_lock:
-            tick = self.live_pnl.get(symbol)
-            if tick is not None:
-                return float(tick.get("pnl") or 0.0)
-
-        cache = getattr(self, "_cycle_ltp_cache", {}) or {}
-        ltp = cache.get(symbol)
-        if ltp is not None and float(ltp) > 0:
-            return float(self._calculate_pnl(symbol, float(ltp)))
-
-        with self._paper_lock:
-            pos = self._paper_positions.get(symbol)
-            if pos:
-                ltp = float(pos.get("ltp") or pos.get("avg_price") or 0.0)
-                if ltp > 0:
-                    return float(self._calculate_pnl(symbol, ltp))
-
-        with self.positions_lock:
-            pos = self.positions.get(symbol)
-            if pos:
-                ltp = float(pos.get("ltp") or pos.get("entry_price") or 0.0)
-                if ltp > 0:
-                    return float(self._calculate_pnl(symbol, ltp))
-        return 0.0
-
-    def _get_saved_trading_configuration_collection(self):
-        coll = self.trading_logs_collection
-        if coll is None:
-            return None
-        config_db_name = getattr(self, "config_db_name", None) or os.environ.get("MONGO_CONFIG_DB_NAME")
-        if config_db_name and config_db_name != coll.database.name:
-            return coll.database.client[config_db_name][SAVED_TRADING_CONFIGURATION_COLLECTION]
-        return coll.database[SAVED_TRADING_CONFIGURATION_COLLECTION]
-
-    def _fetch_saved_trading_configuration(self, configuration_id: str) -> Optional[dict]:
-        if not configuration_id:
-            return None
-        config_coll = self._get_saved_trading_configuration_collection()
-        if config_coll is None:
-            print("[PYRAMID] SavedTradingConfiguration collection unavailable")
-            return None
-
-        config_db_name = config_coll.database.name
-        print(f"[PYRAMID] Looking up configuration_id={configuration_id} in DB={config_db_name}")
-
-        doc = config_coll.find_one({"configuration_id": configuration_id})
-        if doc:
-            return doc
-
-        doc = config_coll.find_one({"_id": configuration_id})
-        if doc:
-            return doc
-
-        try:
-            from bson import ObjectId
-            doc = config_coll.find_one({"_id": ObjectId(configuration_id)})
-            if doc:
-                return doc
-        except Exception:
-            pass
-
-        print(f"[PYRAMID] configuration_id not found: {configuration_id}")
-        return None
-
-    @staticmethod
-    def _normalize_config_symbol(symbol: str) -> str:
-        return (symbol or "").upper().replace("-EQ", "").strip()
-
-    def _get_configuration_symbols_ref(self, config_doc: dict):
-        """
-        Returns (symbols_list, set_path_prefix) where set_path_prefix is used for $set.
-        symbols_list is the mutable list inside config_doc.
-        """
-        root = config_doc.get("configuration", config_doc)
-        alphas = root.get("alphas")
-
-        if isinstance(alphas, dict) and isinstance(alphas.get("symbols"), list):
-            return alphas["symbols"], "configuration.alphas.symbols"
-
-        if isinstance(alphas, list):
-            for idx, alpha in enumerate(alphas):
-                if isinstance(alpha, dict) and isinstance(alpha.get("symbols"), list):
-                    return alpha["symbols"], f"configuration.alphas.{idx}.symbols"
-
-        if isinstance(root.get("symbols"), list):
-            return root["symbols"], "configuration.symbols"
-
-        return None, None
-
-    def _apply_capital_pyramid_on_stop(self) -> None:
-        configuration_id = getattr(self, "configuration_id", None)
-        if not configuration_id:
-            print("[PYRAMID] configuration_id missing — skipping capital pyramid update")
-            return
-
-        config_doc = self._fetch_saved_trading_configuration(configuration_id)
-        if not config_doc:
-            return
-
-        symbols_list, set_path = self._get_configuration_symbols_ref(config_doc)
-        if not symbols_list or not set_path:
-            print(f"[PYRAMID] configuration.alphas.symbols not found for {configuration_id}")
-            return
-
-        config_symbol_map = {}
-        for entry in symbols_list:
-            if not isinstance(entry, dict):
-                continue
-            sym_key = self._normalize_config_symbol(entry.get("symbol"))
-            if sym_key:
-                config_symbol_map[sym_key] = entry
-
-        tracked_symbols = set(self.positions.keys()) | set(self._paper_positions.keys())
-        tracked_symbols |= set(self.symbol_allocations.keys())
-        tracked_symbols |= set(self.live_pnl.keys())
-
-        updated_count = 0
-        for sym in sorted(tracked_symbols):
-            sym_key = self._normalize_config_symbol(sym)
-            unrealized = self._get_symbol_unrealized_pnl(sym_key)
-            if unrealized <= 0:
-                continue
-
-            entry = config_symbol_map.get(sym_key)
-            if not entry:
-                print(f"[PYRAMID] {sym_key}: symbol not in SavedTradingConfiguration — skipped")
-                continue
-
-            rank = entry.get("rank")
-            multiplier = pyramid_multiplier_for_rank(rank)
-            if multiplier is None:
-                print(f"[PYRAMID] {sym_key}: missing multiplier for rank={rank} — skipped")
-                continue
-
-            try:
-                current_capital = float(entry.get("capital") or 0.0)
-            except (TypeError, ValueError):
-                print(f"[PYRAMID] {sym_key}: invalid capital value — skipped")
-                continue
-
-            if current_capital <= 0:
-                print(f"[PYRAMID] {sym_key}: capital <= 0 — skipped")
-                continue
-
-            new_capital = round(current_capital * multiplier, 2)
-            entry["capital"] = new_capital
-            updated_count += 1
-            print(
-                f"[PYRAMID] {sym_key}: rank={rank} capital "
-                f"{current_capital:.2f} -> {new_capital:.2f} "
-                f"(x{multiplier}, unrealized={unrealized:.2f})"
-            )
-
-        if updated_count == 0:
-            print("[PYRAMID] No eligible symbols with unrealized_pnl > 0 — nothing to update")
-            return
-
-        config_coll = self._get_saved_trading_configuration_collection()
-        if config_coll is None:
-            print("[PYRAMID] Failed to persist — collection unavailable")
-            return
-
-        result = config_coll.update_one(
-            {"_id": config_doc["_id"]},
-            {"$set": {set_path: symbols_list}},
-        )
-        if result.modified_count:
-            print(f"[PYRAMID] SavedTradingConfiguration updated ({updated_count} symbol(s))")
-            self.alerts.notify(
-                f"Capital pyramid applied for {updated_count} symbol(s) in configuration {configuration_id}"
-            )
-        else:
-            print("[PYRAMID] MongoDB update completed with no document modifications")
-
-    def _persist_paper_state_snapshot(self, event: str = "") -> None:
-        """Refresh in-memory UI only — do not append MongoDB rows mid-cycle."""
-        sid = getattr(self, "ui_session_id", None) or getattr(self, "session_id", None) or "default"
-        cycle = getattr(self, "_current_cycle_count", 0) or getattr(self, "_restored_cycle_count", 0)
-        rows = self._build_current_ui_rows()
-        if not rows:
-            return
-        try:
-            self._update_ui_snapshot(
-                session_id=sid,
-                cycle=cycle,
-                rows=rows,
-                persist_db=False,
-            )
-            if event:
-                print(f"[PAPER-PERSIST] in-memory UI updated ({event}) cycle={cycle} rows={len(rows)}")
-        except Exception as e:
-            print(f"[PAPER-PERSIST] failed ({event}): {e}")
-
-    def _restore_paper_state_from_mongodb(self) -> bool:
-        coll = self.trading_logs_collection
-        sid = getattr(self, "ui_session_id", None) or getattr(self, "session_id", None)
-        if coll is None or not sid:
-            return False
-
-        try:
-            latest = coll.find_one({"session_id": sid}, sort=[("cycle", -1), ("timestamp", -1)])
-            if not latest:
-                return False
-
-            cycle = int(latest.get("cycle") or 0)
-            self._restored_cycle_count = cycle
-
-            cash = latest.get("portfolio_cash_balance", latest.get("cash_balance"))
-            if cash is not None:
-                self.cash_balance = float(cash)
-                self.current_capital = float(cash)
-
-            realized = latest.get("portfolio_realized_pnl", latest.get("realized_pnl"))
-            if realized is not None:
-                self.realized_pnl = float(realized)
-
-            unrealized = latest.get("portfolio_unrealized_pnl")
-            if unrealized is not None:
-                self.unrealized_pnl = float(unrealized)
-
-            equity = latest.get("portfolio_total_equity", latest.get("total_equity"))
-            if equity is not None:
-                self.current_capital = float(equity)
-
-            for doc in coll.find({"session_id": sid, "cycle": cycle}):
-                sym = (doc.get("symbol") or "").upper().replace("-EQ", "")
-                if not sym:
-                    continue
-                sym_realized = doc.get("symbol_realized_pnl")
-                if sym_realized is not None:
-                    self.realized_pnl_by_symbol[sym] = float(sym_realized)
-
-                side = doc.get("side")
-                action = doc.get("action") or ""
-                if side in ("BUY", "SELL") and "HOLD" in action and "Flat" not in action:
-                    curr_price = float(doc.get("curr_price") or 0.0)
-                    if curr_price > 0 and sym not in self._paper_positions:
-                        qty = int(self.symbol_qty.get(sym) or 0)
-                        if qty <= 0:
-                            continue
-                        self._paper_positions[sym] = {
-                            "symbol": sym,
-                            "side": side,
-                            "qty": qty,
-                            "avg_price": curr_price,
-                            "ltp": curr_price,
-                        }
-
-            self._restore_open_positions_from_trade_log()
-            self._sync_internal_positions_from_paper()
-
-            print(
-                f"[PAPER-RESTORE] session={sid} cycle={cycle} "
-                f"cash={self.cash_balance:.2f} realized={self.realized_pnl:.2f} "
-                f"positions={len(self.positions)}"
-            )
-            return True
-        except Exception as e:
-            print(f"[PAPER-RESTORE] MongoDB restore failed: {e}")
-            return False
-
-    def _restore_open_positions_from_trade_log(self) -> None:
-        if not os.path.exists(self.log_path):
-            return
-
-        today = self._now_market_time().strftime("%Y-%m-%d")
-        last_hold_by_symbol: dict = {}
-
-        try:
-            with open(self.log_path, "r", newline="") as f:
-                reader = csv.reader(f)
-                header = next(reader, None)
-                if not header:
-                    return
-                for row in reader:
-                    if len(row) < 7:
-                        continue
-                    ts, symbol, signal, change, status, price, qty = row[:7]
-                    if not str(ts).startswith(today):
-                        continue
-                    if str(status).lower() != "hold":
-                        continue
-                    sym = symbol.upper().replace("-EQ", "")
-                    try:
-                        q = int(float(qty))
-                        p = float(price)
-                    except (TypeError, ValueError):
-                        continue
-                    if q <= 0 or p <= 0:
-                        continue
-                    last_hold_by_symbol[sym] = {"qty": q, "price": p, "signal": signal}
-        except Exception as e:
-            print(f"[PAPER-RESTORE] trade_log read failed: {e}")
-            return
-
-        for sym, info in last_hold_by_symbol.items():
-            if sym in self._paper_positions:
-                continue
-            side = "BUY"
-            sig = (info.get("signal") or "").upper()
-            if "SHORT" in sig or ("SELL" in sig and "BUY" not in sig):
-                side = "SELL"
-            entry = float(info["price"])
-            qty = int(info["qty"])
-            self.positions[sym] = {
-                "side": side,
-                "qty": qty,
-                "entry_price": entry,
-            }
-            self._paper_positions[sym] = {
-                "symbol": sym,
-                "side": side,
-                "qty": qty,
-                "avg_price": entry,
-                "ltp": entry,
-            }
-            if sym not in self.symbol_qty:
-                self.symbol_qty[sym] = qty
-
-    def _sync_internal_positions_from_paper(self) -> None:
-        with self._paper_lock:
-            paper_copy = dict(self._paper_positions)
-        for sym, p in paper_copy.items():
-            if sym not in self.positions and int(p.get("qty") or 0) > 0:
-                self.positions[sym] = {
-                    "side": p.get("side"),
-                    "qty": int(p.get("qty")),
-                    "entry_price": float(p.get("avg_price") or 0.0),
-                }
-
-    # ---------- BROKER / SESSION (PAPER) ----------
+    # ---------- BROKER / SESSION ----------
 
     def _link_broker(self, force_relink=False):
-        if not force_relink and getattr(self, "session", None):
+        if not force_relink and getattr(self, "broker", None) and getattr(self, "session", None):
             return
 
-        if not getattr(self, "session", None):
-            self._paper_orders = {}
-            self._paper_positions = {}
-            self._paper_order_counter = 0
+        if getattr(self, "broker", None) is None or force_relink:
+            self.broker = BrokerConnector()
 
-        self.session = {"obj": None, "paper": True}
-
-        if self.cash_balance <= 0:
-            self.cash_balance = float(self.initial_capital)
-            self.current_capital = float(self.initial_capital)
-
-        if not getattr(self, "_restored_cycle_count", 0):
-            restored = self._restore_paper_state_from_mongodb()
-            if restored:
-                print("[PAPER] Session restored from MongoDB")
-            else:
-                print("[PAPER] Fresh paper session initialized")
-        else:
-            print("[PAPER] Paper session re-linked (in-memory state preserved)")
+        try:
+            self.session = self.broker.get_session()
+        except Exception as e:
+            self.session = None
+            raise
 
     def _ensure_session(self):
-        """Ensure self.session is present and valid."""
+        """Ensure self.session is present and valid; attempt relink if missing."""
         if getattr(self, "session", None) and isinstance(self.session, dict) and "obj" in self.session:
             return True
         try:
-            self._link_broker(force_relink=False)
+            self._link_broker(force_relink=True)
             return True
         except Exception as e:
-            self.alerts.notify(f"Failed to initialize paper session: {e}")
+            self.alerts.notify(f"Failed to (re)link broker session: {e}")
             return False
     
     # ==================== PARALLEL EXECUTOR HELPER ====================
@@ -1870,7 +1296,7 @@ class AutoTrader:
         """Ensure parallel executor is initialized with current session"""
         if self.parallel_executor is None and hasattr(self, 'session') and self.session:
             self.parallel_executor = ParallelOrderExecutor(
-                trader=self,
+                broker=self.broker,
                 session=self.session,
                 max_workers=5,
                 order_rate_limit=10,
@@ -1885,34 +1311,129 @@ class AutoTrader:
     
     def _seed_realized_pnl_from_broker(self):
         """
-        Paper mode: realized PnL is seeded from MongoDB restore (if any) or starts at 0.
-        """
-        if self.realized_pnl != 0.0 or self.realized_pnl_by_symbol:
-            print(
-                f"[SEED-REALIZED] paper session restored: "
-                f"total=Rs{self.realized_pnl:.2f} per_symbol={dict(self.realized_pnl_by_symbol)}"
-            )
-            return
+        On a fresh session start, pull today's already-realized PnL from the
+        broker so the RMS layers don't believe the day starts at zero.
 
-        print("[SEED-REALIZED] fresh paper session — realized PnL starts at 0")
+        Why: self.realized_pnl and self.realized_pnl_by_symbol are in-memory
+        only — every new AutoTrader instance resets them. If a user stops and
+        restarts mid-day, the previous day's closed-trade losses/profits are
+        invisible to RMS unless we re-seed from the broker's position book.
+
+        Source of truth:
+          - Per-symbol: position book entries (open AND closed positions both
+            carry a 'realised' field with today's realized PnL for that name).
+          - Total cross-check: rmsLimit -> data.m2mrealized.
+        """
+        seeded_total = 0.0
+        seeded_by_symbol: dict = {}
+
+        try:
+            resp = self.broker.get_positions(self.session)
+            if (isinstance(resp, dict) and resp.get("status")
+                    and isinstance(resp.get("raw"), dict)):
+                data = resp["raw"].get("data") or []
+                if isinstance(data, list):
+                    for p in data:
+                        try:
+                            sym = (p.get("tradingsymbol") or "").replace("-EQ", "").upper()
+                            if not sym:
+                                continue
+                            # Angel returns 'realised' (sometimes 'realized' or 'pnl')
+                            r = (p.get("realised")
+                                 or p.get("realized")
+                                 or p.get("pnl")
+                                 or 0.0)
+                            r = float(r or 0.0)
+                            if r != 0.0:
+                                seeded_by_symbol[sym] = seeded_by_symbol.get(sym, 0.0) + r
+                                seeded_total += r
+                        except Exception as inner:
+                            print(f"[SEED-REALIZED] skip row: {inner}")
+                            continue
+        except Exception as e:
+            print(f"[SEED-REALIZED] get_positions failed: {e}")
+
+        # Cross-check vs rmsLimit (broker's own aggregate)
+        broker_total = None
+        try:
+            ab = self.broker.get_account_balance(self.session)
+            if isinstance(ab, dict) and ab.get("status") == "success":
+                broker_total = float(ab.get("m2m_realized") or 0.0)
+        except Exception as e:
+            print(f"[SEED-REALIZED] rmsLimit cross-check failed: {e}")
+
+        # Apply
+        for sym, val in seeded_by_symbol.items():
+            self.realized_pnl_by_symbol[sym] = val
+        self.realized_pnl = seeded_total
+
+        print(
+            f"[SEED-REALIZED] today's realized PnL loaded from broker: "
+            f"total=Rs{seeded_total:.2f} per_symbol={dict(seeded_by_symbol)} "
+            f"broker_m2m_realized=Rs{broker_total if broker_total is not None else 'N/A'}"
+        )
+        if broker_total is not None and abs(broker_total - seeded_total) > 1.0:
+            print(
+                f"[SEED-REALIZED] WARNING: per-symbol sum (Rs{seeded_total:.2f}) "
+                f"differs from broker total (Rs{broker_total:.2f}) by "
+                f"Rs{broker_total - seeded_total:.2f} — using per-symbol sum"
+            )
 
     def _get_broker_positions(self):
         try:
-            with self._paper_lock:
-                positions = [
-                    {
-                        "symbol": p["symbol"],
-                        "side": p["side"],
-                        "qty": int(p["qty"]),
-                        "avg_price": float(p.get("avg_price") or 0.0),
-                        "ltp": float(p.get("ltp") or p.get("avg_price") or 0.0),
-                    }
-                    for p in self._paper_positions.values()
-                    if int(p.get("qty") or 0) > 0
-                ]
+            resp = self.broker.get_positions(self.session)
+
+            if not isinstance(resp, dict) or not resp.get("status"):
+                return []
+
+            raw = resp.get("raw")
+            if not isinstance(raw, dict):
+                return []
+
+            data = raw.get("data")
+            if not isinstance(data, list):
+                return []
+
+            positions = []
+
+            for p in data:
+                try:
+                    net_qty = int(p.get("netqty", 0))
+                    if net_qty == 0:
+                        continue
+
+                    symbol = (
+                        p.get("tradingsymbol", "")
+                        .replace("-EQ", "")
+                        .upper()
+                    )
+
+                    side = "BUY" if net_qty > 0 else "SELL"
+
+                    positions.append({
+                        "symbol": symbol,
+                        "side": side,
+                        "qty": abs(net_qty),
+                        "avg_price": float(
+                            p.get("averageprice")
+                            or p.get("avg_price")
+                            or 0.0
+                        ),
+                        "ltp": float(
+                            p.get("ltp")
+                            or p.get("lastprice")
+                            or p.get("last_price")
+                            or 0.0
+                        )
+                    })
+
+                except Exception:
+                    continue
+
             return positions
+
         except Exception as e:
-            self.alerts.notify(f"Paper positions fetch failed: {e}")
+            self.alerts.notify(f"Broker positions fetch failed: {e}")
             return []
 
     def _get_candle_key(self, now, candle):
@@ -2090,8 +1611,8 @@ class AutoTrader:
 
     def _exit_all_positions_and_stop(self):
         try:
-            paper_orders = self._get_paper_orders_for_tradebook()
-            self._generate_final_merged_tradebook(angel_orders=paper_orders)
+            angel_orders = fetch_todays_intraday_orders(self.broker)
+            self._generate_final_merged_tradebook(angel_orders=angel_orders)
         except Exception as e:
             print(f"[EOD MERGE ERROR] {e}")
         
@@ -2541,12 +2062,93 @@ class AutoTrader:
     # ---------- CASH / BALANCE ----------
 
     def _get_free_cash(self):
-        free_cash = float(self.cash_balance)
-        print(f"[INFO] Paper free cash: {free_cash:,.2f}")
+        try:
+            bal = self.broker.get_account_balance(self.session)
+        except Exception as e:
+            self.alerts.notify(f"Failed to fetch account balance: {e}")
+            return None
+
+        if not isinstance(bal, dict) or bal.get("status") != "success":
+            self.alerts.notify(
+                f"Could not read account balance: {bal.get('error') if isinstance(bal, dict) else bal}"
+            )
+            return None
+
+        if "free_cash" in bal:
+            try:
+                free_cash = float(bal["free_cash"])
+                if free_cash >= 0:
+                    print(f"[INFO] Free cash detected: {free_cash:,.2f}")
+                    return free_cash
+            except Exception:
+                pass
+
+        if "data" in bal:
+            try:
+                data = bal["data"]
+                if isinstance(data, dict):
+                    for key in ["availablecash", "available_cash", "availableCash", "net", "cash"]:
+                        if key in data:
+                            try:
+                                free_cash = float(data[key])
+                                if free_cash >= 0:
+                                    print(f"[INFO] Free cash from data.{key}: {free_cash:,.2f}")
+                                    return free_cash
+                            except Exception:
+                                pass
+            except Exception:
+                pass
+
+        raw = bal.get("raw")
+        free_cash = None
+
+        try:
+            if isinstance(raw, dict):
+                candidate = raw.get("data") if "data" in raw else raw
+                for key in (
+                    "available_cash", "availableCash", "available_balance", "availableBalance",
+                    "cash", "equity", "netEquity", "availableMargin", "available_margin",
+                    "availablecash", "net"
+                ):
+                    if isinstance(candidate, dict) and key in candidate:
+                        try:
+                            free_cash = float(candidate[key])
+                            if free_cash >= 0:
+                                print(f"[INFO] Free cash from raw.{key}: {free_cash:,.2f}")
+                                return free_cash
+                        except Exception:
+                            try:
+                                free_cash = float(str(candidate[key]).replace(",", ""))
+                                if free_cash >= 0:
+                                    print(f"[INFO] Free cash from raw.{key} (parsed): {free_cash:,.2f}")
+                                    return free_cash
+                            except Exception:
+                                pass
+
+                if free_cash is None:
+                    for k, v in (candidate.items() if isinstance(candidate, dict) else []):
+                        try:
+                            if isinstance(v, (int, float)) and v >= 0:
+                                if (
+                                    "available" in k.lower() or
+                                    "free" in k.lower() or
+                                    "cash" in k.lower() or
+                                    "net" in k.lower()
+                                ):
+                                    free_cash = float(v)
+                                    print(f"[INFO] Free cash from scanning {k}: {free_cash:,.2f}")
+                                    return free_cash
+                        except Exception:
+                            continue
+        except Exception as e:
+            print(f"[WARN] Error parsing raw response: {e}")
+            free_cash = None
+
+        print(f"[ERROR] Could not extract free cash from response. Available keys: {list(bal.keys())}")
         return free_cash
     
     # trading snapshot update karne ka function
-    def _update_ui_snapshot(self, session_id, cycle, rows, persist_db=True):
+    def _update_ui_snapshot(self, session_id, cycle, rows):
         snapshot = {
             "cycle": cycle,
             "timestamp": (self.current_cycle_ts_str or self._now_market_time().strftime("%Y-%m-%d %H:%M:%S")),
@@ -2565,10 +2167,7 @@ class AutoTrader:
     # LIVE UI (FAST)
         trading_snapshot[session_id] = snapshot
 
-    # DB LOGGING (HISTORY) — once per cycle unless persist_db=False (paper mid-cycle refresh)
-        if not persist_db:
-            return
-
+    # DB LOGGING (HISTORY)
         try:
             insert_trading_snapshot(
             trading_logs_collection=self.trading_logs_collection,
@@ -2581,13 +2180,18 @@ class AutoTrader:
             print(f"[DB ERROR] Trading snapshot insert failed: {e}")
 
     def _sync_cash_with_broker(self):
-        print("[SYNC] Paper cash balance (authoritative in-memory ledger)")
+        print("[SYNC] Syncing cash balance with broker...")
         free_cash = self._get_free_cash()
         if free_cash is not None:
+            old_balance = self.cash_balance
             self.cash_balance = free_cash
-            print(f"[SYNC]  Cash balance: {free_cash:,.2f}")
+            print(f"[SYNC]  Cash balance updated: {old_balance:,.2f} -> {free_cash:,.2f}")
+            self.alerts.notify(f"Cash synced with broker: {free_cash:,.2f}")
             return True
-        return False
+        else:
+            print("[SYNC] Failed to sync cash balance")
+            self.alerts.notify("Warning: Could not sync cash balance with broker")
+            return False
     
     def _analyze(self, df, swing_interval, user_positions,session_trends=None):
         signals = {}
@@ -2631,7 +2235,7 @@ class AutoTrader:
             regime_col = group["risk_regime"].values if "risk_regime" in group.columns else None
 
             if traj_col is not None and len(traj_col) > 0 and not np.isnan(traj_col[0]):
-                # Use slot 0's trajectory — the most current signal
+                # Use slot 0's trajectory ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â the most current signal
                 trajectory_pct = float(traj_col[0])
                 risk_regime     = int(regime_col[0]) if regime_col is not None else (
                     0 if abs(trajectory_pct) < self.min_trade_pct else 1
@@ -2859,7 +2463,6 @@ class AutoTrader:
         # exit all stocks. Per-ticker RMS remains active.
         # self._check_realized_portfolio_rms()
 
-        self._persist_paper_state_snapshot(event=f"pnl_close:{symbol}")
         return profit
 
     def _is_position_settled(self, broker_pos):
@@ -3033,35 +2636,31 @@ class AutoTrader:
             return
         # ----------------------------------------
 
-        if not getattr(self, "session", None):
+        if not getattr(self, "session", None) or not getattr(self, "broker", None):
             try:
                 self._link_broker()
             except Exception as e:
-                print(f"Failed to initialize paper session during start(): {e}")
-                self.alerts.notify("Failed to initialize paper trading session")
+                print(f"Failed to link broker during start(): {e}")
+                self.alerts.notify("Failed to link broker during start()")
                 return
 
         free_cash = self._get_free_cash()
         if free_cash is None:
-            print("WARNING: Could not determine paper cash balance. Aborting start() for safety.")
-            self.alerts.notify("Could not determine paper cash balance. Stopping AutoTrader for safety.")
+            print("WARNING: Could not determine account free cash/margin from broker. Aborting start() for safety.")
+            self.alerts.notify("Could not determine account balance. Stopping AutoTrader for safety.")
             return
 
-        print(f"Paper free cash / available margin: {free_cash:,.2f}")
-        self.alerts.notify(f"Paper free cash / available margin: {free_cash:,.2f}")
+        print(f"Broker free cash / available margin: {free_cash:,.2f}")
+        self.alerts.notify(f"Broker free cash / available margin: {free_cash:,.2f}")
 
         if use_broker_cash_as_capital:
-            if not getattr(self, "_restored_cycle_count", 0):
-                self.initial_capital = free_cash
-                self.current_capital = free_cash
-                self.cash_balance = free_cash
-            print(f"[INFO]  Using paper cash as initial capital: {self.cash_balance:,.2f}")
-            self.alerts.notify(f"Initial Capital set to paper cash: {self.cash_balance:,.2f}")
+            self.initial_capital = free_cash
+            self.current_capital = free_cash
+            self.cash_balance = free_cash
+            print(f"[INFO]  Using broker cash as initial capital: {free_cash:,.2f}")
+            self.alerts.notify(f"Initial Capital set to broker cash: {free_cash:,.2f}")
         else:
-            if not getattr(self, "_restored_cycle_count", 0):
-                self.cash_balance = float(self.initial_capital)
-                self.current_capital = float(self.initial_capital)
-            print(f"[INFO] Using configured initial capital: {self.initial_capital:,.2f} (Paper ledger has {free_cash:,.2f})")
+            print(f"[INFO] Using configured initial capital: {self.initial_capital:,.2f} (Broker has {free_cash:,.2f})")
             self.alerts.notify(f"Starting Capital: {self.initial_capital:,.2f}")
 
         if stop_on_insufficient and free_cash < float(min_required_cash):
@@ -3094,7 +2693,7 @@ class AutoTrader:
         # carries forward prior closed-trade PnL into the RMS calculations.
         self._seed_realized_pnl_from_broker()
 
-        cycle_count = int(getattr(self, "_restored_cycle_count", 0) or 0)
+        cycle_count = 0
         sync_counter = 0
         
         # ---- START BACKGROUND RECONCILIATION THREAD ----
@@ -3209,7 +2808,6 @@ class AutoTrader:
                             self.positions[sym] = pos.copy()
                             
                 cycle_count += 1
-                self._current_cycle_count = cycle_count
                 sync_counter += 1
 
                 if sync_counter >= 5 and len(self.positions) == 0:
@@ -3383,11 +2981,6 @@ class AutoTrader:
                     self.positions,
                     session_trends=session_trends
                 )
-                self._cycle_ltp_cache = {
-                    sym: float(info["curr_price"])
-                    for sym, info in signals.items()
-                    if info.get("curr_price")
-                }
                 self.tlog.record("ANALYZE_SIGNALS", t_analyze, note=f"symbols={len(signals)}")
 
                 market_now = self._now_market_time()
@@ -3403,7 +2996,6 @@ class AutoTrader:
 
                 session_id = getattr(self, "ui_session_id", "default")
                 ui_rows = []
-                cycle_orders_sent = set()
 
                 # ========== PARALLEL ORDER EXECUTION - PHASE 1: COLLECT ORDERS ==========
                 order_batcher = OrderBatcher()
@@ -3535,7 +3127,6 @@ class AutoTrader:
                                         "side": "NONE",
                                         "signal": "STOP-LOSS",
                                         "action": action_taken,
-                                        "qty": int(qty),
                                         "unrealized_pnl": symbol_unrealized_pnl,
                                         "symbol_unrealized_pnl": symbol_unrealized_pnl,
                                         "symbol_realized_pnl": symbol_realized_pnl,
@@ -3881,7 +3472,7 @@ class AutoTrader:
                     # ========== PHASE 3: PROCESS RESULTS ==========
                     for result in results:
                         t_result = time.time()
-                        sym = result.symbol.upper().replace("-EQ", "")
+                        sym = result.symbol
                         metadata = result.metadata or {}
                         requested_value = metadata.get("order_value", 0.0)
             
@@ -3891,7 +3482,6 @@ class AutoTrader:
                         curr_price = metadata.get("curr_price", 0.0)
                         
                         if result.success and result.filled:
-                            cycle_orders_sent.add(sym)
                             avg_price = result.avg_price
                             filled_qty = result.filled_qty
                             pnl = 0.0
@@ -3930,13 +3520,6 @@ class AutoTrader:
                                     filled_qty,
                                     0.0
                                 )
-
-                            order_value = metadata.get("order_value", 0.0)
-                            if order_value:
-                                try:
-                                    self._release_exposure(sym, order_value)
-                                except Exception as _re:
-                                    print(f"[FILL] {sym}: release_exposure failed: {_re}")
                                                           
                         else:
                             # Order failed at Angel before getting an order_id
@@ -3981,7 +3564,6 @@ class AutoTrader:
                                     "placed_at": time.time(),
                                     # "metadata": metadata   # redundant
                                 })
-                            cycle_orders_sent.add(sym)
 
                             # Log with live redis price instead of 0.0
                             t_ltp = time.time()
@@ -4017,10 +3599,6 @@ class AutoTrader:
                 with self.pending_lock:
                     pending_syms = set(self.pending_orders.keys())
 
-                # Paper fills are synchronous — refresh positions before hold/UI snapshot.
-                with self.broker_pos_lock:
-                    self._broker_positions_cache = self._get_broker_positions()
-                    broker_positions = list(self._broker_positions_cache)
 
                 # ========== CONTINUE WITH HOLD POSITIONS ==========
                 for sym, info in signals.items(): 
@@ -4029,7 +3607,6 @@ class AutoTrader:
                             (p for p in broker_positions if p["symbol"] == sym),
                             None
                         )
-                        
 
                     has_broker_pos = bool(broker_pos and broker_pos.get("qty", 0) > 0)
                     
@@ -4059,17 +3636,12 @@ class AutoTrader:
                     held_qty = broker_pos.get("qty", 0) if has_broker_pos else 0
 
                     # SCENARIO 8 : WAIT NO POSITION
-                    if (
-                        not has_broker_pos
-                        and sym not in pending_syms
-                        and sym not in cycle_orders_sent
-                        and self._stock_exposure(sym) == 0
-                    ):
+                    if not has_broker_pos and sym not in pending_syms and self._stock_exposure(sym) == 0:
                         action_taken = "WAIT (no position)"
                         self._log_trade(sym, sig, change_pct, "wait", curr_price, 0, 0.0)
                     
-                    # SCENARIO 9 : PENDING STATUS (order sent this cycle or awaiting reconcile)
-                    elif sym in pending_syms or sym in cycle_orders_sent:
+                    # SCENARIO 9 : PENDING STATUS
+                    elif sym in pending_syms:
                         action_taken = "PENDING (order sent)"
                         self._log_trade(sym, sig, change_pct, "pending", curr_price, held_qty, live_pnl)
 
@@ -4097,7 +3669,6 @@ class AutoTrader:
                         "side": side,
                         "signal": sig,
                         "action": action_taken,
-                        "qty": int(held_qty),
                         "unrealized_pnl": symbol_unrealized_pnl,
                         "symbol_unrealized_pnl": symbol_unrealized_pnl,
                         "symbol_realized_pnl": symbol_realized_pnl,
@@ -4238,12 +3809,11 @@ class AutoTrader:
                 continue
 
     def shutdown(self):
-        print("[SHUTDOWN] Paper stop — applying capital pyramid update (no square-off)...")
+        print("[SHUTDOWN] Pehle open positions exit kar raha hoon...")
         try:
-            self._apply_capital_pyramid_on_stop()
+            self._exit_all_positions_and_stop()  #  sirf yahan, ek baar
         except Exception as e:
-            print(f"[SHUTDOWN] Capital pyramid update failed: {e}")
-            traceback.print_exc()
+            print(f"[SHUTDOWN] Exit failed: {e}")
         
         if hasattr(self, 'parallel_executor') and self.parallel_executor:
             self.parallel_executor.stop()

@@ -42,6 +42,7 @@ def insert_trading_snapshot(
             "side": r.get("side"),
             "signal": r.get("signal"),
             "action": r.get("action"),
+            "qty": r.get("qty", 0),
             "unrealized_pnl": r.get("unrealized_pnl"),
             "symbol_unrealized_pnl": symbol_unrealized_pnl,
             "symbol_realized_pnl": symbol_realized_pnl,

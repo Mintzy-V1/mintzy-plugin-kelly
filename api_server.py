@@ -128,6 +128,7 @@ MONGO_URI = os.environ.get(
 # MONGO_URI = os.environ.get(REMOTE_DASHBOARD_BASE)
 
 MONGO_DB_NAME = os.environ.get("MONGO_DB_NAME", "mintzy_plugin")
+MONGO_CONFIG_DB_NAME = os.environ.get("MONGO_CONFIG_DB_NAME", MONGO_DB_NAME)
 DB_CONNECTED = False
 sessions_collection = None
 logs_collection = None
@@ -142,6 +143,12 @@ try:
     mongo_client.admin.command('ping')
     DB_CONNECTED = True
     logger.info("Connected to MongoDB for plugin persistence")
+    if MONGO_CONFIG_DB_NAME != MONGO_DB_NAME:
+        logger.info(
+            "SavedTradingConfiguration uses DB %s (plugin sessions/logs: %s)",
+            MONGO_CONFIG_DB_NAME,
+            MONGO_DB_NAME,
+        )
 except Exception as exc:
     logger.warning("MongoDB persistence unavailable (%s)", exc)
 
@@ -835,7 +842,8 @@ async def fetch_session_from_db(session_id: str) -> Optional[Dict[str, Any]]:
         "free_cash": doc.get("free_cash"),
         "created_at": doc.get("created_at"),
         "authenticated_at": doc.get("authenticated_at"),
-        "strategy": doc.get("strategy", "A")
+        "strategy": doc.get("strategy", "A"),
+        "configuration_id": doc.get("configuration_id"),
     }
 
     api_key = _decrypt_val(doc.get("api_key"))
@@ -847,7 +855,8 @@ async def fetch_session_from_db(session_id: str) -> Optional[Dict[str, Any]]:
         restored["client_code"] = client_code
     if password:
         restored["password"] = password
-        bs = doc.get("broker_session")
+
+    bs = doc.get("broker_session")
     if isinstance(bs, dict):
         restored_bs = {
             "user": bs.get("user"),
@@ -898,23 +907,25 @@ def _session_metadata_payload(session_id: str) -> Dict[str, Any]:
     bs = session_data.get("broker_session") or {}
     broker_session_payload = None
     if isinstance(bs, dict):
-        broker_session_payload = {
-            "user": bs.get("user"),
-            "token": _encrypt_val(bs.get("token") or bs.get("jwtToken") or bs.get("access_token")),
-            "refresh_token": _encrypt_val(bs.get("refresh_token") or bs.get("refreshToken")),
-            "feed_token": _encrypt_val(bs.get("feed_token") or bs.get("feedToken"))
-        }
+        token_enc = _encrypt_val(bs.get("token") or bs.get("jwtToken") or bs.get("access_token"))
+        if token_enc:
+            broker_session_payload = {
+                "user": bs.get("user"),
+                "token": token_enc,
+                "refresh_token": _encrypt_val(bs.get("refresh_token") or bs.get("refreshToken")),
+                "feed_token": _encrypt_val(bs.get("feed_token") or bs.get("feedToken"))
+            }
 
+    ram_status = session_data.get("status")
     payload: Dict[str, Any] = {
         "session_id": session_id,
         "user_id": session_data.get("user_id"),
-        "status": session_data.get("status"),
+        "status": ram_status,
         "free_cash": session_data.get("free_cash"),
         # "created_at": session_data.get("created_at"),
         "api_key": _encrypt_val(session_data.get("api_key")),
         "client_code": _encrypt_val(session_data.get("client_code")),
         "password": _encrypt_val(session_data.get("password")),
-        "broker_session": broker_session_payload,
         "authenticated_at": session_data.get("authenticated_at"),
         "trading_status": status_data.get("status"),
         "trading_started_at": status_data.get("started_at"),
@@ -927,7 +938,61 @@ def _session_metadata_payload(session_id: str) -> Dict[str, Any]:
         "last_activity": datetime.utcnow()
       
     }
+    if broker_session_payload:
+        payload["broker_session"] = broker_session_payload
+
+    # Multi-worker safety: never downgrade Mongo auth from stale in-process RAM.
+    if DB_CONNECTED and ram_status != "authenticated":
+        try:
+            db_doc = sessions_collection.find_one({"session_id": session_id})
+        except Exception:
+            db_doc = None
+        if db_doc:
+            db_bs = db_doc.get("broker_session") if isinstance(db_doc.get("broker_session"), dict) else {}
+            db_has_tokens = bool(db_bs.get("token"))
+            db_was_authenticated = (
+                db_doc.get("status") == "authenticated"
+                or (db_doc.get("authenticated_at") and db_has_tokens)
+            )
+            if db_was_authenticated and db_has_tokens:
+                payload["status"] = "authenticated"
+                payload["broker_session"] = db_bs
+                if db_doc.get("authenticated_at") is not None:
+                    payload["authenticated_at"] = db_doc.get("authenticated_at")
+                if db_doc.get("free_cash") is not None:
+                    payload["free_cash"] = db_doc.get("free_cash")
+            elif not broker_session_payload:
+                payload.pop("broker_session", None)
+                if db_doc.get("authenticated_at") and ram_status == "credentials_received":
+                    payload.pop("status", None)
+
     return {k: v for k, v in payload.items() if v is not None or k == "session_id"}
+
+
+def _trading_runtime_payload(session_id: str) -> Dict[str, Any]:
+    """Persist only trading runtime fields — never session auth snapshots."""
+    drain_rms_exited_symbols(session_id)
+    status_data = trading_status.get(session_id, {})
+    session_data = sessions_store.get(session_id, {})
+    if not status_data and not session_data:
+        return {}
+    payload: Dict[str, Any] = {
+        "trading_status": status_data.get("status"),
+        "trading_started_at": status_data.get("started_at"),
+        "symbols": status_data.get("symbols") or session_data.get("symbols"),
+        "total_capital": status_data.get("total_capital"),
+        "error": status_data.get("error"),
+        "exit_initiated": status_data.get("exit_initiated"),
+        "exit_time": status_data.get("exit_time"),
+        "last_activity": datetime.utcnow(),
+    }
+    return {k: v for k, v in payload.items() if v is not None}
+
+
+def persist_trading_runtime_sync(session_id: str) -> None:
+    payload = _trading_runtime_payload(session_id)
+    if payload:
+        persist_session_metadata_sync(session_id, payload)
 
 
 def persist_session_state_sync(session_id: str) -> None:
@@ -954,9 +1019,20 @@ app.add_middleware(
 import os as _os
 try:
     import redis as _redis
+    _redis_host_raw = _os.environ.get(
+        "REDIS_HOST",
+        "clustercfg.mintzy-redis.ci2qc0.use1.cache.amazonaws.com:6379",
+    )
+    _redis_host = _redis_host_raw
+    _redis_port = int(_os.environ.get("REDIS_PORT", "6379"))
+    if ":" in _redis_host_raw:
+        _redis_host, _redis_port_raw = _redis_host_raw.rsplit(":", 1)
+        if _redis_port_raw:
+            _redis_port = int(_redis_port_raw)
+
     _rms_redis = _redis.RedisCluster(
-        host=_os.environ.get("REDIS_HOST", "10.45.41.115"),
-        port=int(_os.environ.get("REDIS_PORT", "6379")),
+        host=_redis_host,
+        port=_redis_port,
         ssl=True,
         ssl_cert_reqs=None,
         decode_responses=True,
@@ -1079,7 +1155,11 @@ class TradingConfig(BaseModel):
     symbols: list[StockAllocation] = Field(..., min_length=1, max_length=25)
     time_frame: str = Field(default="3 hours", description="Prediction time frame")
     use_broker_cash: bool = Field(default=True, description="Use actual broker cash as capital")
-    candle: Optional[str] = Field(default=None, description="Optional candle interval (e.g. '1','5','1m','5m')")  
+    candle: Optional[str] = Field(default=None, description="Optional candle interval (e.g. '1','5','1m','5m')")
+    configuration_id: Optional[str] = Field(
+        default=None,
+        description="SavedTradingConfiguration id for capital pyramid on stop",
+    )
 
 # Helper functions
 def add_log(session_id: str, message: str):
@@ -1091,7 +1171,8 @@ def add_log(session_id: str, message: str):
     trading_logs[session_id].append(log_entry)
     try:
         persist_log_sync(session_id, log_entry)
-        persist_session_state_sync(session_id)
+        # Logs must not snapshot stale worker RAM auth into Mongo (multi-worker 401 bug).
+        persist_trading_runtime_sync(session_id)
     except Exception:
         # Best effort; avoid raising from logging
         pass
@@ -1205,15 +1286,20 @@ async def get_or_restore_session(session_id: str) -> Optional[Dict[str, Any]]:
     db_status = db_session.get("status")
     print(f"[SYNC-DEBUG] DB status: {db_status}")
     
-    # If DB is authenticated, we MUST restore it if local is not valid
-    if db_status == "authenticated":
-        broker_session_db = db_session.get("broker_session")
-        
-        # Check if we have necessary info to restore
-        if (db_session.get("api_key") and 
-            db_session.get("client_code") and 
-            db_session.get("password") and 
-            broker_session_db):
+    broker_session_db = db_session.get("broker_session")
+    db_has_stored_auth = (
+        db_session.get("api_key")
+        and db_session.get("client_code")
+        and db_session.get("password")
+        and broker_session_db
+        and (
+            db_status == "authenticated"
+            or db_session.get("authenticated_at")
+        )
+    )
+
+    # If DB has auth tokens, restore when local RAM is missing or stale.
+    if db_has_stored_auth:
             
             try:
                 # logger.info(f"[{session_id}] Restoring broker session from DB...")
@@ -1269,13 +1355,20 @@ async def get_or_restore_session(session_id: str) -> Optional[Dict[str, Any]]:
                 print(f"[SYNC-DEBUG] Exception during restoration: {e}")
                 logger.error(f"[{session_id}] Failed to restore session from DB: {e}")
                 
-    # If we are here, we couldn't restore or DB wasn't authenticated.
-    # If we didn't have anything in memory, populate it with what we found (even if not authenticated)
-    if not session_data and db_session:
+    # If we are here, we couldn't restore broker from DB tokens.
+    # Populate RAM from DB when local is missing or clearly stale vs persisted auth markers.
+    local_stale = (
+        not session_data
+        or (
+            session_data.get("status") != "authenticated"
+            and db_has_stored_auth
+        )
+    )
+    if local_stale and db_session:
          # Restore all serializable fields so subsequent steps (like totp) can use them
          sessions_store[session_id] = {
             "session_id": session_id,
-            "status": db_session.get("status"),
+            "status": "authenticated" if db_has_stored_auth else db_session.get("status"),
             "created_at": db_session.get("created_at"),
             "api_key": db_session.get("api_key"),
             "client_code": db_session.get("client_code"),
@@ -1284,6 +1377,7 @@ async def get_or_restore_session(session_id: str) -> Optional[Dict[str, Any]]:
             "free_cash": db_session.get("free_cash"),
             "broker_session": db_session.get("broker_session"),
             "authenticated_at": db_session.get("authenticated_at"),
+            "configuration_id": db_session.get("configuration_id"),
          }
          return sessions_store[session_id]
 
@@ -1596,11 +1690,16 @@ async def start_trading(config: TradingConfig ,x_plugin_api_key: str = Header(No
 
     sessions_store[session_id]["strategy"] = config.strategy
     sessions_store[session_id]["symbols"] = symbols_payload
+    if config.configuration_id:
+        sessions_store[session_id]["configuration_id"] = config.configuration_id
 
-    persist_session_metadata_sync(session_id, {
+    early_persist: Dict[str, Any] = {
         "strategy": config.strategy,
-        "symbols": symbols_payload
-    })
+        "symbols": symbols_payload,
+    }
+    if config.configuration_id:
+        early_persist["configuration_id"] = config.configuration_id
+    persist_session_metadata_sync(session_id, early_persist)
 
 
     print("PID:", os.getpid(), "session_id:", session_id)
@@ -1823,16 +1922,21 @@ async def start_trading(config: TradingConfig ,x_plugin_api_key: str = Header(No
         session_data["symbols"] = symbols_payload
         session_data["time_frame"] = config.time_frame
         session_data["candle"] = config.candle
+        if config.configuration_id:
+            session_data["configuration_id"] = config.configuration_id
 
         print("[API SERVER] Symbols payload:", symbols_payload)
 
         # Persist for UI/history (optional)
-        persist_session_metadata_sync(session_id, {
+        persist_payload = {
             "strategy": config.strategy,
             "symbols": symbols_payload,
             "time_frame": config.time_frame,
-            "candle": config.candle
-        })
+            "candle": config.candle,
+        }
+        if config.configuration_id:
+            persist_payload["configuration_id"] = config.configuration_id
+        persist_session_metadata_sync(session_id, persist_payload)
 
         # DIRECTLY start trader using live session_data
         SessionManager.start_session(
@@ -1859,6 +1963,25 @@ async def start_trading(config: TradingConfig ,x_plugin_api_key: str = Header(No
             status_code=500,
             detail=f"Failed to start trading: {str(e)}"
         )
+
+
+@app.post("/api/trading/start-simulation")
+async def start_trading_simulation(config: TradingConfig, x_plugin_api_key: str = Header(None)):
+    """
+    Start paper simulation with the same payload as /api/trading/start.
+    Always uses strategy B -> AutoTrader from auto_trader_exposure_expansion.py.
+    """
+    sim_config = config.model_copy(update={"strategy": "B"})
+    result = await start_trading(sim_config, x_plugin_api_key)
+    if isinstance(result, dict) and result.get("success"):
+        result = {
+            **result,
+            "message": "Paper simulation started successfully",
+            "mode": "simulation",
+            "strategy": "B",
+            "trader_module": "auto_trader_exposure_expansion",
+        }
+    return result
 
 
 @app.get("/api/health")
@@ -2128,6 +2251,43 @@ def get_final_tradebook(
         filename=file_path.name,
         media_type="text/csv",
     )
+
+@app.post("/api/trading/stop-simulation/{session_id}")
+async def stop_trading_simulation(session_id: str, x_plugin_api_key: str = Header(None)):
+    """
+    Stop the paper simulation worker only. Keeps session auth (status=authenticated)
+    so the same session_id can start live trading later via POST /api/trading/start.
+    """
+    session_exists = (
+        session_id in sessions_store
+        or session_id in trading_status
+        or session_id in trading_logs
+    )
+    db_record = None
+    if not session_exists and DB_CONNECTED:
+        db_record = await fetch_session_from_db(session_id)
+        session_exists = db_record is not None
+
+    if not session_exists:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    SessionManager.stop_simulation_session(session_id)
+
+    if session_id in trading_status:
+        trading_status[session_id]["status"] = "simulation_stopped"
+
+    # Refresh auth into this worker's RAM from Mongo before logging (avoids stale persist).
+    await get_or_restore_session(session_id)
+
+    add_log(session_id, "Paper simulation stopped (session remains authenticated)")
+
+    return {
+        "success": True,
+        "message": "Simulation stopped; session remains authenticated",
+        "session_id": session_id,
+        "trading_status": "simulation_stopped",
+    }
+
 
 @app.post("/api/trading/stop/{session_id}")  #changed this one also 
 async def stop_trading(session_id: str , x_plugin_api_key: str = Header(None)):
