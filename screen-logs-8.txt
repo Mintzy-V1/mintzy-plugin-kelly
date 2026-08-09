@@ -1,0 +1,41 @@
+me_frame='3 hours' use_broker_cash=True candle='75m' configuration_id=None
+[SYNC-DEBUG] get_or_restore_session called for session_20260807050040_690cd6
+da
+[SYNC-DEBUG] Local RAM status: authenticated
+inside the persist session metadata sync
+inside the ensure session doc
+updating the sessions_collection
+PID: 1202084 session_id: session_20260807050040_690cd6da
+PID: 1202084 Thread: MainThread sessions_store_keys: ['session_2026080705004
+0_690cd6da']
+[START-TRADING-DEBUG] Retrieved session_data: dict_keys(['session_id', 'stat
+us', 'created_at', 'api_key', 'client_code', 'password', 'user_id', 'free_ca
+sh', 'broker_session', 'authenticated_at', 'configuration_id', 'broker', 'st
+rategy', 'symbols', 'candle_interval', 'time_frame', 'candle'])
+[START-TRADING-DEBUG] Session Status: authenticated
+inside the persist session metadata sync
+inside the ensure session doc
+updating the sessions_collection
+[LTP-WS] connected
+[E 260807 07:30:06 smartWebSocketV2:212] Error occurred during subscribe: Co
+nnection is already closed.
+[LTP-WS] subscribe error: Connection is already closed.
+[W 260807 07:30:06 smartWebSocketV2:318] Attempting to resubscribe/reconnect
+ (Attempt 1)...
+[API SERVER] Symbols payload: [{'symbol': 'ADANIENT', 'capital': 43400.0, 's
+top_loss': 0.05}, {'symbol': 'AXISBANK', 'capital': 39200.0, 'stop_loss': 0.
+05}, {'symbol': 'COALINDIA', 'capital': 33600.0, 'stop_loss': 0.05}, {'symbo
+l': 'DIVISLAB', 'capital': 28000.0, 'stop_loss': 0.05}, {'symbol': 'EICHERMO
+T', 'capital': 28000.0, 'stop_loss': 0.05}, {'symbol': 'HINDALCO', 'capital'
+: 21000.0, 'stop_loss': 0.05}]
+inside the persist session metadata sync
+inside the ensure session doc
+updating the sessions_collection
+[SessionManager] Session already running: session_20260807050040_690cd6da
+[Worker-session_20260807050040_690cd6da] Session status marked stopped in Mo
+ngo
+[SessionManager] Worker session_20260807050040_690cd6da simulation stopped (
+session auth kept)
+[SessionManager] Worker session_20260807050040_690cd6da stopped gracefully
+[SessionManager] Worker session_20260807050040_690cd6da process died
+
