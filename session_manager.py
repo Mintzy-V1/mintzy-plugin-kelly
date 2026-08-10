@@ -61,6 +61,7 @@ def _trader_worker(
     mongo_uri: str,
     mongo_db_name: str,
     configuration_id: Optional[str] = None,
+    mongo_config_db_name: Optional[str] = None,
 ):
     """
     Worker process that runs a single AutoTrader instance.
@@ -100,12 +101,12 @@ def _trader_worker(
         mongo_client = MongoClient(mongo_uri, serverSelectionTimeoutMS=5000)
         mongo_db = mongo_client[mongo_db_name]
         trading_logs_collection = mongo_db[trading_logs_collection_name]
-        config_db_name = os.environ.get("MONGO_CONFIG_DB_NAME", mongo_db_name)
-        if config_db_name != mongo_db_name:
-            print(
-                f"[Worker-{session_id}] SavedTradingConfiguration DB: {config_db_name} "
-                f"(sessions/logs: {mongo_db_name})"
-            )
+        config_db_name = mongo_config_db_name or os.environ.get("MONGO_CONFIG_DB_NAME") or mongo_db_name
+        os.environ["MONGO_CONFIG_DB_NAME"] = config_db_name
+        print(
+            f"[Worker-{session_id}] Mongo DBs — sessions/logs: {mongo_db_name}, "
+            f"SavedTradingConfiguration: {config_db_name}"
+        )
         
         # Initialize clients
         prediction_client = PredictionClient(
@@ -155,6 +156,8 @@ def _trader_worker(
         
         # Configure trader
         trader.session_id = session_id
+        trader.broker_live_session = restored
+        trader.broker_session_payload = broker_config.get("broker_session")
         trader.session = restored
         trader.ui_session_id = session_id
         trader.symbol_allocations = {k: v["capital"] for k, v in allocations.items()}
@@ -343,7 +346,7 @@ class SessionManager:
         return f"{cls.SIMULATION_STOP_PREFIX}{session_id}"
 
     @classmethod
-    def _mark_simulation_stop(cls, session_id: str) -> None:
+    def _mark_simulation_stop(cls, session_id: str) -> bool:
         try:
             cls._redis().setex(
                 cls._simulation_stop_key(session_id),
@@ -351,8 +354,10 @@ class SessionManager:
                 "1",
             )
             print(f"[SessionManager] Simulation stop flag set for {session_id}")
+            return True
         except Exception as e:
             print(f"[SessionManager] Failed to set simulation stop flag: {e}")
+            return False
 
     # Configuration
     MAX_WORKERS = int(os.environ.get("MAX_TRADER_WORKERS", "6"))  # Limit concurrent processes
@@ -446,8 +451,13 @@ class SessionManager:
         
         # Check if session already exists
         if session_id in cls._workers:
-            print(f"[SessionManager] Session already running: {session_id}")
-            raise RuntimeError(f"Session {session_id} is already running")
+            worker = cls._workers[session_id]
+            if not worker.is_alive():
+                print(f"[SessionManager] Stale worker registry for {session_id} — cleaning up")
+                cls._cleanup_worker(session_id)
+            else:
+                print(f"[SessionManager] Session already running: {session_id}")
+                raise RuntimeError(f"Session {session_id} is already running")
         
         # Check worker limit
         active_workers = sum(1 for w in cls._workers.values() if w.is_alive())
@@ -505,6 +515,7 @@ class SessionManager:
             "mongodb+srv://mintzy01ai_db_user:zTqQRkovgKbLXQdp@cluster0.cztcxpr.mongodb.net/?appName=Cluster0"
         )
         mongo_db_name = os.environ.get("MONGO_DB_NAME", "mintzy_plugin")
+        mongo_config_db_name = os.environ.get("MONGO_CONFIG_DB_NAME", mongo_db_name)
         
         # Create stop event and health queue for this worker
         stop_event = mp.Event()
@@ -526,6 +537,7 @@ class SessionManager:
                 mongo_uri,
                 mongo_db_name,
                 configuration_id,
+                mongo_config_db_name,
             ),
             daemon=False  # Not daemon - we want proper cleanup
         )
@@ -616,16 +628,22 @@ class SessionManager:
                     print(f"[SessionManager] Ã¢Å“â€¦ SIGTERM bheja PID={pid} ko")
                     
                     # 30 sec wait karo graceful shutdown ke liye
-                    import psutil
                     try:
+                        import psutil
                         proc = psutil.Process(pid)
                         proc.wait(timeout=60)
-                        print(f"[SessionManager] Ã¢Å“â€¦ Process {pid} gracefully band ho gaya")
-                    except psutil.TimeoutExpired:
-                        print(f"[SessionManager] Ã¢Å¡ Ã¯Â¸Â 30 sec baad bhi alive Ã¢â‚¬â€ SIGKILL bhej raha hoon...")
-                        os.kill(pid, signal.SIGKILL)
-                    except psutil.NoSuchProcess:
-                        print(f"[SessionManager] Ã¢Å“â€¦ Process {pid} already band ho gaya")
+                        print(f"[SessionManager] Process {pid} gracefully band ho gaya")
+                    except ImportError:
+                        print("[SessionManager] psutil not installed — waiting without process handle")
+                        time.sleep(5)
+                    except Exception as wait_err:
+                        if wait_err.__class__.__name__ == "TimeoutExpired":
+                            print(f"[SessionManager] 60s baad bhi alive — SIGKILL bhej raha hoon...")
+                            os.kill(pid, signal.SIGKILL)
+                        elif wait_err.__class__.__name__ == "NoSuchProcess":
+                            print(f"[SessionManager] Process {pid} already band ho gaya")
+                        else:
+                            print(f"[SessionManager] Process wait failed: {wait_err}")
                         
                 except ProcessLookupError:
                     print(f"[SessionManager] Ã¢Å¡ Ã¯Â¸Â PID={pid} already exist nahi karta Ã¢â‚¬â€ already band tha")
@@ -669,8 +687,15 @@ class SessionManager:
         Sets a Redis flag so the worker exit handler keeps status=authenticated in Mongo.
         """
         print(f"[SessionManager] Simulation stop request: '{session_id}'")
-        cls._mark_simulation_stop(session_id)
-        return cls.stop_session(session_id)
+        if not cls._mark_simulation_stop(session_id):
+            print(
+                f"[SessionManager] Simulation stop aborted for {session_id} "
+                "— Redis simulation-stop flag was not set"
+            )
+            return False
+        stopped = cls.stop_session(session_id)
+        cls._cleanup_worker(session_id)
+        return stopped
     
     @classmethod
     def exit_symbol_for_session(cls, session_id: str, symbol: str) -> dict:

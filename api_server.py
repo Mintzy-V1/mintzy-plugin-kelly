@@ -10,6 +10,7 @@ import uvicorn
 import os
 import logging
 import random
+import time
 
 from datetime import datetime
 import json
@@ -1161,6 +1162,42 @@ class TradingConfig(BaseModel):
         description="SavedTradingConfiguration id for capital pyramid on stop",
     )
 
+
+def _sim_plugin_now_ms() -> int:
+    return int(time.time() * 1000)
+
+
+def _sim_plugin_elapsed_ms(start_perf: float) -> float:
+    return round((time.perf_counter() - start_perf) * 1000, 2)
+
+
+def _sim_plugin_payload_summary(config: "TradingConfig") -> Dict[str, Any]:
+    return {
+        "session_id": config.session_id,
+        "strategy": config.strategy,
+        "configuration_id": config.configuration_id,
+        "time_frame": config.time_frame,
+        "use_broker_cash": config.use_broker_cash,
+        "candle": config.candle,
+        "symbol_count": len(config.symbols),
+        "symbols": [
+            {
+                "symbol": s.symbol,
+                "capital": float(s.capital),
+                "stop_loss": float(s.stop_loss),
+            }
+            for s in config.symbols
+        ],
+    }
+
+
+def _sim_plugin_log(event: str, **fields):
+    parts = [f"[SIM-PLUGIN-TIMING] {event}"]
+    for key, value in fields.items():
+        parts.append(f"{key}={value}")
+    print(" | ".join(parts))
+
+
 # Helper functions
 def add_log(session_id: str, message: str):
     """Add a log message for a trading session"""
@@ -1673,11 +1710,35 @@ async def start_trading(config: TradingConfig ,x_plugin_api_key: str = Header(No
     """
     Start automated trading with configured allocations.
     """
-    print(f"[START-TRADING-DEBUG] Request received. Config={config}")
+    is_simulation_start = config.strategy == "B"
+    req_started_perf = time.perf_counter()
+    req_started_ms = _sim_plugin_now_ms()
+
+    if is_simulation_start:
+        _sim_plugin_log(
+            "start_trading ENTER (via start-simulation)",
+            session_id=config.session_id,
+            configuration_id=config.configuration_id,
+            symbol_count=len(config.symbols),
+            started_at_ms=req_started_ms,
+            payload=_sim_plugin_payload_summary(config),
+        )
+    else:
+        print(f"[START-TRADING-DEBUG] Request received. Config={config}")
 # verify_plugin_key(x_plugin_api_key)
 
     session_id = config.session_id
+    restore_started_perf = time.perf_counter()
     session_data = await get_or_restore_session(session_id)
+    if is_simulation_start:
+        _sim_plugin_log(
+            "start_trading phase=get_or_restore_session",
+            session_id=session_id,
+            elapsed_ms=_sim_plugin_elapsed_ms(restore_started_perf),
+            session_status=session_data.get("status") if session_data else None,
+            has_broker=bool(session_data and session_data.get("broker")),
+            has_broker_session=bool(session_data and session_data.get("broker_session")),
+        )
 
     symbols_payload = [
     {
@@ -1699,7 +1760,15 @@ async def start_trading(config: TradingConfig ,x_plugin_api_key: str = Header(No
     }
     if config.configuration_id:
         early_persist["configuration_id"] = config.configuration_id
+    persist_started_perf = time.perf_counter()
     persist_session_metadata_sync(session_id, early_persist)
+    if is_simulation_start:
+        _sim_plugin_log(
+            "start_trading phase=persist_session_metadata_sync (early)",
+            session_id=session_id,
+            configuration_id=config.configuration_id,
+            elapsed_ms=_sim_plugin_elapsed_ms(persist_started_perf),
+        )
 
 
     print("PID:", os.getpid(), "session_id:", session_id)
@@ -1721,6 +1790,13 @@ async def start_trading(config: TradingConfig ,x_plugin_api_key: str = Header(No
         raise HTTPException(status_code=404, detail="Session not found or expired")
     
     if session_data.get("status") != "authenticated":
+        if is_simulation_start:
+            _sim_plugin_log(
+                "start_trading ABORT not authenticated",
+                session_id=session_id,
+                status=session_data.get("status"),
+                total_elapsed_ms=_sim_plugin_elapsed_ms(req_started_perf),
+            )
         print(f"[START-TRADING-DEBUG] 401 Triggered! Status is {session_data.get('status')}")
         raise HTTPException(
             status_code=401,
@@ -1936,17 +2012,59 @@ async def start_trading(config: TradingConfig ,x_plugin_api_key: str = Header(No
         }
         if config.configuration_id:
             persist_payload["configuration_id"] = config.configuration_id
+        persist_started_perf = time.perf_counter()
         persist_session_metadata_sync(session_id, persist_payload)
+        if is_simulation_start:
+            _sim_plugin_log(
+                "start_trading phase=persist_session_metadata_sync (final)",
+                session_id=session_id,
+                configuration_id=config.configuration_id,
+                strategy=config.strategy,
+                elapsed_ms=_sim_plugin_elapsed_ms(persist_started_perf),
+            )
 
         # DIRECTLY start trader using live session_data
-        SessionManager.start_session(
-            session_id=session_id,
-            session_doc=session_data,
-            trading_logs_collection=trading_logs_collection
-        )
+        worker_started_perf = time.perf_counter()
+        try:
+            SessionManager.start_session(
+                session_id=session_id,
+                session_doc=session_data,
+                trading_logs_collection=trading_logs_collection
+            )
+        except RuntimeError as runtime_err:
+            err_text = str(runtime_err)
+            if "already running" in err_text.lower():
+                worker_status = SessionManager.get_session_status(session_id)
+                if worker_status and worker_status.get("is_alive"):
+                    if is_simulation_start:
+                        _sim_plugin_log(
+                            "start_trading idempotent already running",
+                            session_id=session_id,
+                            worker_elapsed_ms=_sim_plugin_elapsed_ms(worker_started_perf),
+                            total_elapsed_ms=_sim_plugin_elapsed_ms(req_started_perf),
+                        )
+                    return {
+                        "success": True,
+                        "message": "Trading already active on plugin",
+                        "session_id": session_id,
+                        "total_allocated": total_allocated,
+                        "free_cash": free_cash,
+                        "symbols": [s.symbol for s in config.symbols],
+                        "already_running": True,
+                    }
+            raise
+
+        if is_simulation_start:
+            _sim_plugin_log(
+                "start_trading phase=SessionManager.start_session",
+                session_id=session_id,
+                configuration_id=config.configuration_id,
+                worker_elapsed_ms=_sim_plugin_elapsed_ms(worker_started_perf),
+                total_elapsed_ms=_sim_plugin_elapsed_ms(req_started_perf),
+            )
 
 
-        return {
+        response_payload = {
                 "success": True,
                 "message": "Trading started successfully",
                 "session_id": session_id,
@@ -1954,6 +2072,14 @@ async def start_trading(config: TradingConfig ,x_plugin_api_key: str = Header(No
                 "free_cash": free_cash,
                 "symbols": [s.symbol for s in config.symbols],
             }
+        if is_simulation_start:
+            _sim_plugin_log(
+                "start_trading EXIT success",
+                session_id=session_id,
+                configuration_id=config.configuration_id,
+                total_elapsed_ms=_sim_plugin_elapsed_ms(req_started_perf),
+            )
+        return response_payload
 
 
     except HTTPException:
@@ -1971,8 +2097,27 @@ async def start_trading_simulation(config: TradingConfig, x_plugin_api_key: str 
     Start paper simulation with the same payload as /api/trading/start.
     Always uses strategy B -> AutoTrader from auto_trader_exposure_expansion.py.
     """
+    endpoint_started_perf = time.perf_counter()
+    endpoint_started_ms = _sim_plugin_now_ms()
+    incoming = _sim_plugin_payload_summary(config)
+    _sim_plugin_log(
+        "POST /api/trading/start-simulation ENTER",
+        started_at_ms=endpoint_started_ms,
+        incoming_payload=incoming,
+        configuration_id_present=bool(config.configuration_id),
+    )
+
     sim_config = config.model_copy(update={"strategy": "B"})
+    _sim_plugin_log(
+        "POST /api/trading/start-simulation normalized",
+        session_id=sim_config.session_id,
+        forced_strategy="B",
+        configuration_id=sim_config.configuration_id,
+        symbol_count=len(sim_config.symbols),
+    )
+
     result = await start_trading(sim_config, x_plugin_api_key)
+
     if isinstance(result, dict) and result.get("success"):
         result = {
             **result,
@@ -1980,7 +2125,22 @@ async def start_trading_simulation(config: TradingConfig, x_plugin_api_key: str 
             "mode": "simulation",
             "strategy": "B",
             "trader_module": "auto_trader_exposure_expansion",
+            "configuration_id": sim_config.configuration_id,
+            "timing_ms": _sim_plugin_elapsed_ms(endpoint_started_perf),
         }
+        _sim_plugin_log(
+            "POST /api/trading/start-simulation EXIT success",
+            session_id=sim_config.session_id,
+            configuration_id=sim_config.configuration_id,
+            total_elapsed_ms=_sim_plugin_elapsed_ms(endpoint_started_perf),
+        )
+    else:
+        _sim_plugin_log(
+            "POST /api/trading/start-simulation EXIT non-success",
+            session_id=sim_config.session_id,
+            result=result,
+            total_elapsed_ms=_sim_plugin_elapsed_ms(endpoint_started_perf),
+        )
     return result
 
 
@@ -2094,9 +2254,14 @@ async def get_trading_status(session_id: str):
     if db_record and (db_record.get("status") == "stopped" or db_record.get("trading_status") == "stopped"):
         status_name = "stopped"
 
+    worker_status = SessionManager.get_session_status(session_id)
+    worker_active = bool(worker_status and worker_status.get("is_alive"))
+
     return {
         "success": True,
         "status": status_name,
+        "worker_active": worker_active,
+        "worker": worker_status,
         "started_at": started_at,
         "symbols": symbols,
         "total_capital": total_capital,
@@ -2258,6 +2423,16 @@ async def stop_trading_simulation(session_id: str, x_plugin_api_key: str = Heade
     Stop the paper simulation worker only. Keeps session auth (status=authenticated)
     so the same session_id can start live trading later via POST /api/trading/start.
     """
+    endpoint_started_perf = time.perf_counter()
+    endpoint_started_ms = _sim_plugin_now_ms()
+    _sim_plugin_log(
+        "POST /api/trading/stop-simulation ENTER",
+        session_id=session_id,
+        started_at_ms=endpoint_started_ms,
+        body="(none — session_id is path param only)",
+    )
+
+    lookup_started_perf = time.perf_counter()
     session_exists = (
         session_id in sessions_store
         or session_id in trading_status
@@ -2268,25 +2443,104 @@ async def stop_trading_simulation(session_id: str, x_plugin_api_key: str = Heade
         db_record = await fetch_session_from_db(session_id)
         session_exists = db_record is not None
 
+    _sim_plugin_log(
+        "stop-simulation phase=session_lookup",
+        session_id=session_id,
+        session_exists=session_exists,
+        in_memory_store=session_id in sessions_store,
+        in_trading_status=session_id in trading_status,
+        db_record_found=bool(db_record),
+        stored_configuration_id=(
+            sessions_store.get(session_id, {}).get("configuration_id")
+            or (db_record or {}).get("configuration_id")
+        ),
+        elapsed_ms=_sim_plugin_elapsed_ms(lookup_started_perf),
+    )
+
     if not session_exists:
+        _sim_plugin_log(
+            "stop-simulation ABORT session not found",
+            session_id=session_id,
+            total_elapsed_ms=_sim_plugin_elapsed_ms(endpoint_started_perf),
+        )
         raise HTTPException(status_code=404, detail="Session not found")
 
-    SessionManager.stop_simulation_session(session_id)
+    stop_worker_started_perf = time.perf_counter()
+    stopped = SessionManager.stop_simulation_session(session_id)
+    _sim_plugin_log(
+        "stop-simulation phase=SessionManager.stop_simulation_session",
+        session_id=session_id,
+        stopped=stopped,
+        elapsed_ms=_sim_plugin_elapsed_ms(stop_worker_started_perf),
+    )
+
+    if not stopped:
+        _sim_plugin_log(
+            "stop-simulation ABORT worker stop failed",
+            session_id=session_id,
+            total_elapsed_ms=_sim_plugin_elapsed_ms(endpoint_started_perf),
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Failed to stop paper simulation (simulation-stop flag or worker shutdown failed)",
+        )
 
     if session_id in trading_status:
         trading_status[session_id]["status"] = "simulation_stopped"
 
-    # Refresh auth into this worker's RAM from Mongo before logging (avoids stale persist).
-    await get_or_restore_session(session_id)
+    restore_started_perf = time.perf_counter()
+    restored = await get_or_restore_session(session_id)
+    if session_id in sessions_store:
+        sessions_store[session_id]["status"] = "authenticated"
+    elif restored:
+        sessions_store[session_id] = {**restored, "status": "authenticated"}
+
+    post_restore_status = sessions_store.get(session_id, {}).get("status")
+    post_restore_configuration_id = sessions_store.get(session_id, {}).get("configuration_id")
+    _sim_plugin_log(
+        "stop-simulation phase=restore_authenticated",
+        session_id=session_id,
+        post_restore_status=post_restore_status,
+        configuration_id=post_restore_configuration_id,
+        has_broker_session=bool(sessions_store.get(session_id, {}).get("broker_session")),
+        elapsed_ms=_sim_plugin_elapsed_ms(restore_started_perf),
+    )
+
+    try:
+        persist_started_perf = time.perf_counter()
+        persist_session_metadata_sync(session_id, {
+            "status": "authenticated",
+            "trading_status": "simulation_stopped"
+        })
+        _sim_plugin_log(
+            "stop-simulation phase=persist_session_metadata_sync",
+            session_id=session_id,
+            elapsed_ms=_sim_plugin_elapsed_ms(persist_started_perf),
+        )
+    except Exception as persist_err:
+        _sim_plugin_log(
+            "stop-simulation persist warning",
+            session_id=session_id,
+            error=str(persist_err),
+        )
 
     add_log(session_id, "Paper simulation stopped (session remains authenticated)")
 
-    return {
+    response_payload = {
         "success": True,
         "message": "Simulation stopped; session remains authenticated",
         "session_id": session_id,
         "trading_status": "simulation_stopped",
+        "configuration_id": post_restore_configuration_id,
+        "timing_ms": _sim_plugin_elapsed_ms(endpoint_started_perf),
     }
+    _sim_plugin_log(
+        "POST /api/trading/stop-simulation EXIT success",
+        session_id=session_id,
+        configuration_id=post_restore_configuration_id,
+        total_elapsed_ms=_sim_plugin_elapsed_ms(endpoint_started_perf),
+    )
+    return response_payload
 
 
 @app.post("/api/trading/stop/{session_id}")  #changed this one also 

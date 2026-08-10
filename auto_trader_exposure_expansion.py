@@ -27,15 +27,19 @@ print("TRADER snapshot id:", id(trading_snapshot))
 
 
 # ==================== CAPITAL PYRAMID (STOP TRADING) ====================
-SAVED_TRADING_CONFIGURATION_COLLECTION = "SavedTradingConfiguration"
+# Must match Mongoose model SavedTradingConfiguration → savedtradingconfigurations
+SAVED_TRADING_CONFIGURATION_COLLECTION = "savedtradingconfigurations"
+SAVED_TRADING_CONFIGURATION_COLLECTION_CANDIDATES = (
+    "savedtradingconfigurations",  # Mongoose default (gateway)
+    "SavedTradingConfiguration",     # legacy manual name
+)
+DEFAULT_MONGO_CONFIG_DB_NAME = "test"
 
-PYRAMID_MULTIPLIERS = {
-    1: 1.45,
-    2: 1.35,
-    3: 1.25,
-    4: 1.15,
-    5: 1.10,
-}
+# Rank-based pyramid multipliers (rank 1 = index 0, highest rank gets largest mult)
+PYR_MULTS = [1.40, 1.30, 1.20, 1.00, 1.00, 0.75, 0.75, 0.75, 0.75, 0.75]
+
+# 14:15 IST stop-lock — exit losers, continue with green symbols
+STOP_LOCK_TIME = dt_time(14, 15)
 
 
 def pyramid_multiplier_for_rank(rank) -> Optional[float]:
@@ -43,7 +47,12 @@ def pyramid_multiplier_for_rank(rank) -> Optional[float]:
         rank_key = int(rank)
     except (TypeError, ValueError):
         return None
-    return PYRAMID_MULTIPLIERS.get(rank_key)
+    if rank_key < 1:
+        return None
+    idx = rank_key - 1
+    if idx >= len(PYR_MULTS):
+        return PYR_MULTS[-1]
+    return PYR_MULTS[idx]
 
 
 # ==================== TIMING LOGGER ====================
@@ -508,7 +517,7 @@ class AutoTrader:
         self.trading_logs_collection = trading_logs_collection
         self.config_db_name = (
             os.environ.get("MONGO_CONFIG_DB_NAME")
-            or (trading_logs_collection.database.name if trading_logs_collection is not None else None)
+            or DEFAULT_MONGO_CONFIG_DB_NAME
         )
         self.max_exposure_pct = 1.00
         self.reserved_exposure = {}  
@@ -525,6 +534,8 @@ class AutoTrader:
         self._restored_cycle_count = 0
         self._current_cycle_count = 0
         self.session = None
+        self.broker_live_session = None
+        self.broker_session_payload = None
         self.configuration_id = None
         # =============================================================
         # ====== CANDLE TIMESTAMP (for correct logging) ======
@@ -561,6 +572,7 @@ class AutoTrader:
         self.trade_history = []
         self.stop_event = threading.Event()
         self._exit_warning_sent = False
+        self._1415_stoplock_done = False
         self.positions_lock = threading.Lock()   #  ADD THIS LINE
         self._exited_symbols = set()  # Symbols manually exited Ã¢â‚¬â€ excluded from future cycles
 
@@ -1523,55 +1535,231 @@ class AutoTrader:
                     return float(self._calculate_pnl(symbol, ltp))
         return 0.0
 
-    def _get_saved_trading_configuration_collection(self):
+    def _resolve_config_db_name(self) -> str:
+        return (
+            getattr(self, "config_db_name", None)
+            or os.environ.get("MONGO_CONFIG_DB_NAME")
+            or DEFAULT_MONGO_CONFIG_DB_NAME
+        )
+
+    def _get_saved_trading_configuration_collection(self, collection_name=None):
         coll = self.trading_logs_collection
+
         if coll is None:
             return None
-        config_db_name = getattr(self, "config_db_name", None) or os.environ.get("MONGO_CONFIG_DB_NAME")
-        if config_db_name and config_db_name != coll.database.name:
-            return coll.database.client[config_db_name][SAVED_TRADING_CONFIGURATION_COLLECTION]
-        return coll.database[SAVED_TRADING_CONFIGURATION_COLLECTION]
+        config_db_name = self._resolve_config_db_name()
+        name = collection_name or SAVED_TRADING_CONFIGURATION_COLLECTION
+        if config_db_name != coll.database.name:
+            return coll.database.client[config_db_name][name]
+        return coll.database[name]
+
+    def _pyramid_lookup_filters(self, configuration_id: str):
+        """Build Mongo queries for SavedTradingConfiguration lookup."""
+        filters = []
+        object_id = None
+        try:
+            from bson import ObjectId
+
+            if ObjectId.is_valid(configuration_id):
+                object_id = ObjectId(configuration_id)
+                filters.append({"_id": object_id})
+                print(f"[PYRAMID] ObjectId parsed OK: {object_id}")
+            else:
+                print(
+                    f"[PYRAMID] configuration_id is not valid ObjectId hex: "
+                    f"{configuration_id!r} (len={len(configuration_id or '')})"
+                )
+        except Exception as exc:
+            print(f"[PYRAMID] ObjectId parse failed: {type(exc).__name__}: {exc}")
+
+        filters.append({"configuration_id": configuration_id})
+        if object_id is not None:
+            filters.append({"configuration_id": str(object_id)})
+
+        # De-dupe while preserving order
+        seen = set()
+        unique = []
+        for query in filters:
+            key = tuple(sorted((k, str(v)) for k, v in query.items()))
+            if key not in seen:
+                seen.add(key)
+                unique.append(query)
+        return unique
+
+    def _pyramid_log_collection_diagnostics(self, mongo_client, config_db_name: str) -> None:
+        """Log DB/collection hints when lookup fails."""
+        try:
+            db = mongo_client[config_db_name]
+            all_names = db.list_collection_names()
+            related = [
+                n for n in all_names
+                if "saved" in n.lower() or "trading" in n.lower() or "config" in n.lower()
+            ]
+            print(
+                f"[PYRAMID] DB={config_db_name!r} collections (saved/trading/config related): "
+                f"{related or '(none)'}"
+            )
+            for coll_name in SAVED_TRADING_CONFIGURATION_COLLECTION_CANDIDATES:
+                if coll_name not in all_names:
+                    print(f"[PYRAMID]   collection {coll_name!r} — NOT PRESENT in this DB")
+                    continue
+                coll = db[coll_name]
+                try:
+                    count = coll.estimated_document_count()
+                except Exception as count_err:
+                    count = f"error:{count_err}"
+                sample_ids = []
+                try:
+                    for doc in coll.find({}, {"_id": 1}).limit(5):
+                        sample_ids.append(str(doc.get("_id")))
+                except Exception as sample_err:
+                    sample_ids = [f"error:{sample_err}"]
+                print(
+                    f"[PYRAMID]   collection {coll_name!r} — est_docs={count} "
+                    f"sample_ids={sample_ids}"
+                )
+        except Exception as diag_err:
+            print(f"[PYRAMID] Collection diagnostics failed: {type(diag_err).__name__}: {diag_err}")
 
     def _fetch_saved_trading_configuration(self, configuration_id: str) -> Optional[dict]:
         if not configuration_id:
+            print("[PYRAMID] configuration_id empty — skip lookup")
             return None
-        config_coll = self._get_saved_trading_configuration_collection()
+
+        base_coll = self.trading_logs_collection
+        if base_coll is None:
+            print("[PYRAMID] trading_logs_collection unavailable — cannot resolve Mongo client")
+            return None
+
+        config_db_name = self._resolve_config_db_name()
+        logs_db_name = base_coll.database.name
+        mongo_client = base_coll.database.client
+        env_config_db = os.environ.get("MONGO_CONFIG_DB_NAME")
+        trader_config_db = getattr(self, "config_db_name", None)
+
+        print(
+            f"[PYRAMID] lookup start configuration_id={configuration_id} "
+            f"target_db={config_db_name!r} logs_db={logs_db_name!r} "
+            f"trader.config_db_name={trader_config_db!r} env.MONGO_CONFIG_DB_NAME={env_config_db!r}"
+        )
+
+        lookup_filters = self._pyramid_lookup_filters(configuration_id)
+
+        for coll_name in SAVED_TRADING_CONFIGURATION_COLLECTION_CANDIDATES:
+            config_coll = self._get_saved_trading_configuration_collection(coll_name)
+            if config_coll is None:
+                print(f"[PYRAMID] collection handle unavailable for {coll_name!r}")
+                continue
+
+            try:
+                est_count = config_coll.estimated_document_count()
+            except Exception as count_err:
+                est_count = f"error:{count_err}"
+
+            print(
+                f"[PYRAMID] querying {config_db_name}.{coll_name} "
+                f"(est_docs={est_count}) with {len(lookup_filters)} filter(s)"
+            )
+
+            for idx, query in enumerate(lookup_filters):
+                try:
+                    doc = config_coll.find_one(query)
+                except Exception as find_err:
+                    print(
+                        f"[PYRAMID]   filter[{idx}] {query} -> ERROR "
+                        f"{type(find_err).__name__}: {find_err}"
+                    )
+                    continue
+
+                status = "FOUND" if doc else "miss"
+                print(f"[PYRAMID]   filter[{idx}] {query} -> {status}")
+                if doc:
+                    self._pyramid_config_filter = query
+                    self._pyramid_config_collection = coll_name
+                    print(
+                        f"[PYRAMID] Found SavedTradingConfiguration "
+                        f"db={config_db_name} collection={coll_name} _id={doc.get('_id')}"
+                    )
+                    return doc
+
+        print(
+            f"[PYRAMID] configuration_id not found in {config_db_name}: {configuration_id} "
+            f"(tried collections={list(SAVED_TRADING_CONFIGURATION_COLLECTION_CANDIDATES)})"
+        )
+        self._pyramid_log_collection_diagnostics(mongo_client, config_db_name)
+        return None
+
+    def _persist_saved_configuration_symbols(
+        self,
+        config_doc: dict,
+        symbols_list: list,
+        set_path: str,
+        updated_count: int,
+        configuration_id: str,
+    ) -> bool:
+        config_coll = self._get_saved_trading_configuration_collection(
+            getattr(self, "_pyramid_config_collection", None)
+        )
         if config_coll is None:
-            print("[PYRAMID] SavedTradingConfiguration collection unavailable")
-            return None
+            print("[PYRAMID] Failed to persist — collection unavailable")
+            return False
 
         config_db_name = config_coll.database.name
-        print(f"[PYRAMID] Looking up configuration_id={configuration_id} in DB={config_db_name}")
+        coll_name = config_coll.name
+        query = getattr(self, "_pyramid_config_filter", None) or {"_id": config_doc.get("_id")}
+        update_doc = {
+            set_path: symbols_list,
+            "pyramid_updated_at": datetime.now(timezone.utc),
+        }
 
-        doc = config_coll.find_one({"configuration_id": configuration_id})
-        if doc:
-            return doc
+        result = config_coll.update_one(query, {"$set": update_doc})
+        print(
+            f"[PYRAMID] Mongo save to {config_db_name}.{coll_name} "
+            f"matched={result.matched_count} modified={result.modified_count}"
+        )
 
-        doc = config_coll.find_one({"_id": configuration_id})
-        if doc:
-            return doc
+        if result.matched_count == 0:
+            print(f"[PYRAMID] Save failed — no document matched filter={query}")
+            return False
 
-        try:
-            from bson import ObjectId
-            doc = config_coll.find_one({"_id": ObjectId(configuration_id)})
-            if doc:
-                return doc
-        except Exception:
-            pass
+        if result.modified_count:
+            print(
+                f"[PYRAMID] SavedTradingConfiguration updated "
+                f"({updated_count} profitable symbol(s) kept)"
+            )
+            if updated_count > 0:
+                self.alerts.notify(
+                    f"Capital pyramid applied for {updated_count} symbol(s) in configuration {configuration_id}"
+                )
+            return True
 
-        print(f"[PYRAMID] configuration_id not found: {configuration_id}")
-        return None
+        print("[PYRAMID] Document matched but capital values unchanged (already saved?)")
+        return True
 
     @staticmethod
     def _normalize_config_symbol(symbol: str) -> str:
         return (symbol or "").upper().replace("-EQ", "").strip()
+
+    def _normalize_configuration_root(self, config_doc: dict) -> dict:
+        root = config_doc.get("configuration", config_doc)
+        if isinstance(root, str):
+            try:
+                root = json.loads(root)
+            except Exception as exc:
+                print(f"[PYRAMID] configuration JSON parse failed: {exc}")
+                return {}
+        if not isinstance(root, dict):
+            print(f"[PYRAMID] configuration root is {type(root).__name__}, expected dict")
+            return {}
+        print(f"[PYRAMID] configuration keys: {list(root.keys())}")
+        return root
 
     def _get_configuration_symbols_ref(self, config_doc: dict):
         """
         Returns (symbols_list, set_path_prefix) where set_path_prefix is used for $set.
         symbols_list is the mutable list inside config_doc.
         """
-        root = config_doc.get("configuration", config_doc)
+        root = self._normalize_configuration_root(config_doc)
         alphas = root.get("alphas")
 
         if isinstance(alphas, dict) and isinstance(alphas.get("symbols"), list):
@@ -1587,7 +1775,277 @@ class AutoTrader:
 
         return None, None
 
+    def _iter_configuration_symbol_lists(self, config_doc: dict):
+        """Yield every symbols array stored under configuration / alphas."""
+        root = self._normalize_configuration_root(config_doc)
+        symbols = root.get("symbols")
+        if isinstance(symbols, list):
+            yield symbols
+
+        alphas = root.get("alphas")
+        if isinstance(alphas, dict):
+            alpha_symbols = alphas.get("symbols")
+            if isinstance(alpha_symbols, list):
+                yield alpha_symbols
+        elif isinstance(alphas, list):
+            for alpha in alphas:
+                if isinstance(alpha, dict) and isinstance(alpha.get("symbols"), list):
+                    yield alpha["symbols"]
+
+    def _build_configuration_rank_map(self, config_doc: dict) -> dict:
+        """Map SYMBOL -> rank from configuration.symbols (master) and alphas.symbols."""
+        root = self._normalize_configuration_root(config_doc)
+        rank_map = {}
+
+        master_symbols = root.get("symbols")
+        if isinstance(master_symbols, list):
+            print(f"[PYRAMID] configuration.symbols entries={len(master_symbols)}")
+            for idx, entry in enumerate(master_symbols):
+                if not isinstance(entry, dict):
+                    continue
+                sym_key = self._normalize_config_symbol(entry.get("symbol"))
+                if not sym_key:
+                    continue
+                rank = entry.get("rank")
+                if rank is None:
+                    rank = idx + 1
+                    print(f"[PYRAMID] {sym_key}: rank missing in configuration.symbols — using order rank={rank}")
+                try:
+                    rank_map[sym_key] = int(rank)
+                except (TypeError, ValueError):
+                    print(f"[PYRAMID] {sym_key}: invalid rank={rank!r} in configuration.symbols")
+
+        alphas = root.get("alphas")
+        alpha_symbols = alphas.get("symbols") if isinstance(alphas, dict) else None
+        if isinstance(alpha_symbols, list):
+            print(f"[PYRAMID] configuration.alphas.symbols entries={len(alpha_symbols)}")
+            for idx, entry in enumerate(alpha_symbols):
+                if not isinstance(entry, dict):
+                    continue
+                sym_key = self._normalize_config_symbol(entry.get("symbol"))
+                if not sym_key or sym_key in rank_map:
+                    continue
+                rank = entry.get("rank")
+                if rank is None:
+                    rank = idx + 1
+                try:
+                    rank_map[sym_key] = int(rank)
+                except (TypeError, ValueError):
+                    pass
+
+        print(f"[PYRAMID] rank_map built for {len(rank_map)} symbol(s): {rank_map}")
+        return rank_map
+
+    def _build_configuration_entry_templates(self, config_doc: dict) -> dict:
+        """Best-effort symbol -> config entry template from all config symbol lists."""
+        templates = {}
+        for entries in self._iter_configuration_symbol_lists(config_doc):
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                sym_key = self._normalize_config_symbol(entry.get("symbol"))
+                if not sym_key:
+                    continue
+                merged = dict(templates.get(sym_key) or {})
+                merged.update(entry)
+                templates[sym_key] = merged
+        return templates
+
+    def _get_pyramid_active_symbol_keys(self) -> list:
+        """Symbols that were actually part of this simulation run."""
+        active = set()
+
+        allocations = getattr(self, "symbol_allocations", None) or {}
+        if isinstance(allocations, dict):
+            for sym in allocations.keys():
+                sym_key = self._normalize_config_symbol(sym)
+                if sym_key:
+                    active.add(sym_key)
+
+        initial_allocations = getattr(self, "initial_allocations", None) or {}
+        if isinstance(initial_allocations, dict):
+            for sym in initial_allocations.keys():
+                sym_key = self._normalize_config_symbol(sym)
+                if sym_key:
+                    active.add(sym_key)
+
+        try:
+            with self._paper_lock:
+                for sym in self._paper_positions.keys():
+                    sym_key = self._normalize_config_symbol(sym)
+                    if sym_key:
+                        active.add(sym_key)
+        except Exception:
+            pass
+
+        return sorted(active)
+
+    def _resolve_symbol_capital(self, sym_key: str, entry: dict) -> float:
+        try:
+            cap = float(entry.get("capital") or 0.0)
+        except (TypeError, ValueError):
+            cap = 0.0
+        if cap > 0:
+            return cap
+
+        allocations = getattr(self, "symbol_allocations", None) or {}
+        raw_alloc = allocations.get(sym_key)
+        if isinstance(raw_alloc, dict):
+            try:
+                return float(raw_alloc.get("capital") or 0.0)
+            except (TypeError, ValueError):
+                return 0.0
+        if raw_alloc is not None:
+            try:
+                return float(raw_alloc)
+            except (TypeError, ValueError):
+                return 0.0
+
+        initial_allocations = getattr(self, "initial_allocations", None) or {}
+        init_entry = initial_allocations.get(sym_key)
+        if isinstance(init_entry, dict):
+            try:
+                return float(init_entry.get("capital") or 0.0)
+            except (TypeError, ValueError):
+                return 0.0
+        return 0.0
+
+    def _build_pyramid_config_entries(self, config_doc: dict, symbols_list: list, rank_map: dict):
+        templates = self._build_configuration_entry_templates(config_doc)
+        entry_by_sym = {}
+        for entry in symbols_list or []:
+            if not isinstance(entry, dict):
+                continue
+            sym_key = self._normalize_config_symbol(entry.get("symbol"))
+            if sym_key:
+                entry_by_sym[sym_key] = dict(entry)
+
+        active_symbols = self._get_pyramid_active_symbol_keys()
+        if not active_symbols:
+            active_symbols = sorted(entry_by_sym.keys())
+            print(f"[PYRAMID] no active allocations — falling back to symbols_list ({len(active_symbols)} symbol(s))")
+        else:
+            print(f"[PYRAMID] active simulation symbols: {active_symbols}")
+
+        config_entries = []
+        for sym_key in active_symbols:
+            entry = dict(templates.get(sym_key) or entry_by_sym.get(sym_key) or {})
+            entry["symbol"] = sym_key
+
+            cap = self._resolve_symbol_capital(sym_key, entry)
+            if cap <= 0:
+                print(f"[PYRAMID] {sym_key}: no capital — skipped")
+                continue
+            entry["capital"] = cap
+
+            rank = entry.get("rank")
+            if rank is None and sym_key in rank_map:
+                entry["rank"] = rank_map[sym_key]
+                print(f"[PYRAMID] {sym_key}: rank resolved from config -> {entry['rank']}")
+
+            config_entries.append((sym_key, entry, cap))
+
+        return config_entries
+
+    def _resolve_live_broker_session(self):
+        """Return a SmartConnect session suitable for RMS / balance calls."""
+        live = getattr(self, "broker_live_session", None)
+        if isinstance(live, dict) and live.get("obj"):
+            return live
+
+        session = getattr(self, "session", None)
+        if isinstance(session, dict) and session.get("obj") and not session.get("paper"):
+            self.broker_live_session = session
+            return session
+
+        payload = getattr(self, "broker_session_payload", None)
+        broker = getattr(self, "broker", None)
+        if payload and broker:
+            try:
+                restored = broker.restore_session(payload)
+                if isinstance(restored, dict) and restored.get("obj"):
+                    self.broker_live_session = restored
+                    print("[BROKER] Live session re-restored from payload for RMS")
+                    return restored
+                print("[BROKER] Re-restore from payload did not yield SmartConnect obj")
+            except Exception as exc:
+                print(f"[BROKER] Re-restore from payload failed: {type(exc).__name__}: {exc}")
+        return None
+
+    @staticmethod
+    def _parse_broker_free_cash(balance_resp) -> Optional[float]:
+        if not isinstance(balance_resp, dict) or balance_resp.get("status") != "success":
+            return None
+
+        if "free_cash" in balance_resp:
+            try:
+                free_cash = float(balance_resp["free_cash"])
+                if free_cash >= 0:
+                    return free_cash
+            except (TypeError, ValueError):
+                pass
+
+        data = balance_resp.get("data")
+        if isinstance(data, dict):
+            for key in ("availablecash", "available_cash", "availableCash", "net", "cash"):
+                if key in data:
+                    try:
+                        free_cash = float(data[key])
+                        if free_cash >= 0:
+                            return free_cash
+                    except (TypeError, ValueError):
+                        pass
+        return None
+
+    def _fetch_broker_free_cash(self, context: str = "BROKER") -> Optional[float]:
+        """Fetch available cash from Angel RMS using the preserved live broker session."""
+        live = self._resolve_live_broker_session()
+        broker = getattr(self, "broker", None)
+        if not live:
+            print(f"[{context}] No live broker session available for RMS (paper session only?)")
+            return None
+        if not broker:
+            print(f"[{context}] Broker connector missing — cannot fetch RMS balance")
+            return None
+
+        try:
+            balance_resp = broker.get_account_balance(live)
+            broker_cash = self._parse_broker_free_cash(balance_resp)
+            if broker_cash is not None:
+                print(f"[{context}] broker free_cash (RMS): {broker_cash:,.2f}")
+                return broker_cash
+            print(
+                f"[{context}] broker balance unreadable: "
+                f"{balance_resp.get('error') if isinstance(balance_resp, dict) else balance_resp}"
+            )
+        except Exception as exc:
+            print(f"[{context}] broker balance fetch failed: {type(exc).__name__}: {exc}")
+        return None
+
+    def _get_pyramid_free_cash(self) -> float:
+        """Pyramid uses broker RMS cash; paper ledger is never the primary source."""
+        broker_cash = self._fetch_broker_free_cash(context="PYRAMID")
+        if broker_cash is not None:
+            return broker_cash
+
+        session_free = getattr(self, "session_free_cash", None)
+        if session_free is not None:
+            try:
+                parsed = float(session_free)
+                print(f"[PYRAMID] using session_free_cash fallback: {parsed:,.2f}")
+                return parsed
+            except (TypeError, ValueError):
+                pass
+
+        paper_cash = float(self.cash_balance)
+        print(f"[PYRAMID] WARNING: falling back to paper cash_balance: {paper_cash:,.2f}")
+        return paper_cash
+
     def _apply_capital_pyramid_on_stop(self) -> None:
+        if getattr(self, "_pyramid_applied", False):
+            print("[PYRAMID] Already applied — skipping duplicate stop")
+            return
+
         configuration_id = getattr(self, "configuration_id", None)
         if not configuration_id:
             print("[PYRAMID] configuration_id missing — skipping capital pyramid update")
@@ -1598,79 +2056,171 @@ class AutoTrader:
             return
 
         symbols_list, set_path = self._get_configuration_symbols_ref(config_doc)
-        if not symbols_list or not set_path:
-            print(f"[PYRAMID] configuration.alphas.symbols not found for {configuration_id}")
+        if symbols_list is None or set_path is None:
+            print(f"[PYRAMID] configuration symbols not found for {configuration_id}")
             return
 
-        config_symbol_map = {}
-        for entry in symbols_list:
-            if not isinstance(entry, dict):
-                continue
-            sym_key = self._normalize_config_symbol(entry.get("symbol"))
-            if sym_key:
-                config_symbol_map[sym_key] = entry
+        rank_map = self._build_configuration_rank_map(config_doc)
+        config_entries = self._build_pyramid_config_entries(config_doc, symbols_list, rank_map)
+        if not config_entries:
+            print("[PYRAMID] No symbols with capital to evaluate — aborting update")
+            return
 
-        tracked_symbols = set(self.positions.keys()) | set(self._paper_positions.keys())
-        tracked_symbols |= set(self.symbol_allocations.keys())
-        tracked_symbols |= set(self.live_pnl.keys())
+        total_capital_allocated = sum(cap for _, _, cap in config_entries)
+        free_cash = float(self._get_pyramid_free_cash())
+        remaining_cash = free_cash - total_capital_allocated
+        print(
+            f"[PYRAMID] free_cash={free_cash:.2f} "
+            f"total_capital_allocated={total_capital_allocated:.2f} "
+            f"remaining_cash={remaining_cash:.2f} "
+            f"evaluated_symbols={[sym for sym, _, _ in config_entries]}"
+        )
 
-        updated_count = 0
-        for sym in sorted(tracked_symbols):
-            sym_key = self._normalize_config_symbol(sym)
+        profitable = []
+        removed = []
+        for sym_key, entry, cap in config_entries:
             unrealized = self._get_symbol_unrealized_pnl(sym_key)
-            if unrealized <= 0:
-                continue
+            if unrealized > 0:
+                profitable.append((sym_key, entry, cap, unrealized))
+            else:
+                removed.append(f"{sym_key}(unrealized={unrealized:.2f})")
 
-            entry = config_symbol_map.get(sym_key)
-            if not entry:
-                print(f"[PYRAMID] {sym_key}: symbol not in SavedTradingConfiguration — skipped")
-                continue
+        if removed:
+            print(f"[PYRAMID] Removing non-profitable symbols: {', '.join(removed)}")
 
+        if not profitable:
+            print("[PYRAMID] No symbols with unrealized_pnl > 0 — saving empty symbol list")
+            saved = self._persist_saved_configuration_symbols(
+                config_doc=config_doc,
+                symbols_list=[],
+                set_path=set_path,
+                updated_count=0,
+                configuration_id=configuration_id,
+            )
+            if saved:
+                self._pyramid_applied = True
+            return
+
+        profitable_static = []
+        for sym_key, entry, current_capital, unrealized in profitable:
             rank = entry.get("rank")
-            multiplier = pyramid_multiplier_for_rank(rank)
-            if multiplier is None:
-                print(f"[PYRAMID] {sym_key}: missing multiplier for rank={rank} — skipped")
+            if rank is None:
+                rank = rank_map.get(sym_key)
+            static_multiplier = pyramid_multiplier_for_rank(rank)
+            if static_multiplier is None:
+                print(
+                    f"[PYRAMID] {sym_key}: missing/invalid rank={rank!r} "
+                    f"(entry_rank={entry.get('rank')!r}, map_rank={rank_map.get(sym_key)!r}) — skipped"
+                )
                 continue
+            capital_after_static = current_capital * static_multiplier
+            profitable_static.append(
+                (sym_key, entry, current_capital, unrealized, static_multiplier, capital_after_static, rank)
+            )
 
-            try:
-                current_capital = float(entry.get("capital") or 0.0)
-            except (TypeError, ValueError):
-                print(f"[PYRAMID] {sym_key}: invalid capital value — skipped")
-                continue
+        if not profitable_static:
+            print("[PYRAMID] No profitable symbols with valid rank — aborting update")
+            return
 
-            if current_capital <= 0:
-                print(f"[PYRAMID] {sym_key}: capital <= 0 — skipped")
-                continue
+        capital_after_static_sum = sum(item[5] for item in profitable_static)
+        if capital_after_static_sum <= 0:
+            print("[PYRAMID] Sum of capital after static multiplier <= 0 — aborting")
+            return
 
-            new_capital = round(current_capital * multiplier, 2)
-            entry["capital"] = new_capital
-            updated_count += 1
+        dynamic_multiplier = remaining_cash / capital_after_static_sum
+        print(
+            f"[PYRAMID] capital_after_static_sum={capital_after_static_sum:.2f} "
+            f"dynamic_multiplier={dynamic_multiplier:.4f}"
+        )
+        if dynamic_multiplier <= 0:
+            print(f"[PYRAMID] dynamic_multiplier <= 0 ({dynamic_multiplier:.4f}) — aborting update")
+            return
+
+        new_symbols_list = []
+        for (
+            sym_key,
+            entry,
+            current_capital,
+            unrealized,
+            static_multiplier,
+            capital_after_static,
+            rank,
+        ) in profitable_static:
+            new_capital = round(dynamic_multiplier * capital_after_static, 2)
+            new_entry = dict(entry)
+            new_entry["capital"] = new_capital
+            new_entry["rank"] = rank
+            new_symbols_list.append(new_entry)
             print(
                 f"[PYRAMID] {sym_key}: rank={rank} capital "
                 f"{current_capital:.2f} -> {new_capital:.2f} "
-                f"(x{multiplier}, unrealized={unrealized:.2f})"
+                f"(after_static={capital_after_static:.2f}, static=x{static_multiplier}, "
+                f"dynamic=x{dynamic_multiplier:.4f}, "
+                f"combined=x{static_multiplier * dynamic_multiplier:.4f}, "
+                f"unrealized={unrealized:.2f})"
             )
 
-        if updated_count == 0:
-            print("[PYRAMID] No eligible symbols with unrealized_pnl > 0 — nothing to update")
+        if not new_symbols_list:
+            print("[PYRAMID] No profitable symbols with valid rank — aborting update")
             return
 
-        config_coll = self._get_saved_trading_configuration_collection()
-        if config_coll is None:
-            print("[PYRAMID] Failed to persist — collection unavailable")
-            return
-
-        result = config_coll.update_one(
-            {"_id": config_doc["_id"]},
-            {"$set": {set_path: symbols_list}},
+        saved = self._persist_saved_configuration_symbols(
+            config_doc=config_doc,
+            symbols_list=new_symbols_list,
+            set_path=set_path,
+            updated_count=len(new_symbols_list),
+            configuration_id=configuration_id,
         )
-        if result.modified_count:
-            print(f"[PYRAMID] SavedTradingConfiguration updated ({updated_count} symbol(s))")
-            self.alerts.notify(
-                f"Capital pyramid applied for {updated_count} symbol(s) in configuration {configuration_id}"
-            )
-        else:
-            print("[PYRAMID] MongoDB update completed with no document modifications")
+        if saved:
+            self._pyramid_applied = True
+
+    def _run_1415_stoplock_exits(self, active_symbols: list) -> None:
+        """At 14:15 IST exit open symbols with unrealized_pnl < 0; continue with the rest."""
+        now = self._now_market_time()
+        print(f"[1415-STOPLOCK] Check at {now.strftime('%Y-%m-%d %H:%M:%S')} IST")
+
+        symbols_to_check = {
+            self._normalize_config_symbol(s) for s in (active_symbols or []) if s
+        }
+
+        with self.broker_pos_lock:
+            self._broker_positions_cache = self._get_broker_positions()
+            for pos in self._broker_positions_cache or []:
+                sym = self._normalize_config_symbol(pos.get("symbol"))
+                if sym:
+                    symbols_to_check.add(sym)
+
+        exited = []
+        continuing = []
+        for sym_key in sorted(symbols_to_check):
+            if sym_key in self._exited_symbols:
+                continue
+
+            qty = self._get_symbol_position_qty(sym_key)
+            if qty == 0:
+                continuing.append(f"{sym_key}(flat)")
+                continue
+
+            unrealized = self._get_symbol_unrealized_pnl(sym_key)
+            if unrealized < 0:
+                print(f"[1415-STOPLOCK] {sym_key} unrealized={unrealized:.2f} — placing exit")
+                result = self.exit_single_position(sym_key)
+                if result.get("success"):
+                    exited.append(sym_key)
+                else:
+                    print(
+                        f"[1415-STOPLOCK] {sym_key} exit failed: "
+                        f"{result.get('message', 'unknown error')}"
+                    )
+            else:
+                continuing.append(f"{sym_key}(unrealized={unrealized:.2f})")
+
+        summary = (
+            f"14:15 stop-lock complete — exited: {exited or 'none'}; "
+            f"continuing: {continuing}"
+        )
+        print(f"[1415-STOPLOCK] {summary}")
+        self.alerts.notify(summary)
 
     def _persist_paper_state_snapshot(self, event: str = "") -> None:
         """Refresh in-memory UI only — do not append MongoDB rows mid-cycle."""
@@ -1831,10 +2381,14 @@ class AutoTrader:
     # ---------- BROKER / SESSION (PAPER) ----------
 
     def _link_broker(self, force_relink=False):
-        if not force_relink and getattr(self, "session", None):
+        live = getattr(self, "session", None)
+        if isinstance(live, dict) and live.get("obj") and not live.get("paper"):
+            self.broker_live_session = live
+
+        if not force_relink and isinstance(getattr(self, "session", None), dict) and self.session.get("paper"):
             return
 
-        if not getattr(self, "session", None):
+        if not getattr(self, "session", None) or not self.session.get("paper"):
             self._paper_orders = {}
             self._paper_positions = {}
             self._paper_order_counter = 0
@@ -1842,8 +2396,10 @@ class AutoTrader:
         self.session = {"obj": None, "paper": True}
 
         if self.cash_balance <= 0:
-            self.cash_balance = float(self.initial_capital)
-            self.current_capital = float(self.initial_capital)
+            broker_cash = self._fetch_broker_free_cash(context="PAPER-LINK")
+            seed_cash = broker_cash if broker_cash is not None else float(self.initial_capital)
+            self.cash_balance = seed_cash
+            self.current_capital = seed_cash
 
         if not getattr(self, "_restored_cycle_count", 0):
             restored = self._restore_paper_state_from_mongodb()
@@ -2541,8 +3097,12 @@ class AutoTrader:
     # ---------- CASH / BALANCE ----------
 
     def _get_free_cash(self):
+        broker_cash = self._fetch_broker_free_cash(context="INFO")
+        if broker_cash is not None:
+            return broker_cash
+
         free_cash = float(self.cash_balance)
-        print(f"[INFO] Paper free cash: {free_cash:,.2f}")
+        print(f"[INFO] Paper ledger cash (broker RMS unavailable): {free_cash:,.2f}")
         return free_cash
     
     # trading snapshot update karne ka function
@@ -3033,36 +3593,38 @@ class AutoTrader:
             return
         # ----------------------------------------
 
-        if not getattr(self, "session", None):
-            try:
-                self._link_broker()
-            except Exception as e:
-                print(f"Failed to initialize paper session during start(): {e}")
-                self.alerts.notify("Failed to initialize paper trading session")
-                return
+        try:
+            self._link_broker()
+        except Exception as e:
+            print(f"Failed to initialize paper session during start(): {e}")
+            self.alerts.notify("Failed to initialize paper trading session")
+            return
 
         free_cash = self._get_free_cash()
         if free_cash is None:
-            print("WARNING: Could not determine paper cash balance. Aborting start() for safety.")
-            self.alerts.notify("Could not determine paper cash balance. Stopping AutoTrader for safety.")
+            print("WARNING: Could not determine available cash. Aborting start() for safety.")
+            self.alerts.notify("Could not determine available cash. Stopping AutoTrader for safety.")
             return
 
-        print(f"Paper free cash / available margin: {free_cash:,.2f}")
-        self.alerts.notify(f"Paper free cash / available margin: {free_cash:,.2f}")
+        print(f"Available broker/paper cash: {free_cash:,.2f}")
+        self.alerts.notify(f"Available cash: {free_cash:,.2f}")
 
         if use_broker_cash_as_capital:
             if not getattr(self, "_restored_cycle_count", 0):
                 self.initial_capital = free_cash
                 self.current_capital = free_cash
                 self.cash_balance = free_cash
-            print(f"[INFO]  Using paper cash as initial capital: {self.cash_balance:,.2f}")
-            self.alerts.notify(f"Initial Capital set to paper cash: {self.cash_balance:,.2f}")
+            print(f"[INFO] Using broker cash as initial capital: {self.cash_balance:,.2f}")
+            self.alerts.notify(f"Initial Capital set to broker cash: {self.cash_balance:,.2f}")
         else:
             if not getattr(self, "_restored_cycle_count", 0):
-                self.cash_balance = float(self.initial_capital)
-                self.current_capital = float(self.initial_capital)
-            print(f"[INFO] Using configured initial capital: {self.initial_capital:,.2f} (Paper ledger has {free_cash:,.2f})")
-            self.alerts.notify(f"Starting Capital: {self.initial_capital:,.2f}")
+                self.cash_balance = free_cash
+                self.current_capital = free_cash
+            print(
+                f"[INFO] Simulation paper ledger seeded from broker cash: {self.cash_balance:,.2f} "
+                f"(configured default was {self.initial_capital:,.2f})"
+            )
+            self.alerts.notify(f"Simulation ledger seeded from broker cash: {self.cash_balance:,.2f}")
 
         if stop_on_insufficient and free_cash < float(min_required_cash):
             self.alerts.notify(
@@ -3137,6 +3699,10 @@ class AutoTrader:
                 # =====================================================
                 now = self._now_market_time()
 
+                if not self._1415_stoplock_done and now.time() >= STOP_LOCK_TIME:
+                    self._run_1415_stoplock_exits(symbols)
+                    self._1415_stoplock_done = True
+
                 #temp change 
                 warning_time = dt_time(15, 25)  # 3:25 PM IST
                 if now.time() >= warning_time and not self._exit_warning_sent:
@@ -3145,8 +3711,8 @@ class AutoTrader:
                     self.alerts.notify(msg)
                     self._exit_warning_sent = True
                 
-                # EXIT ALL POSITIONS AT 3:30 PM IST
-                market_exit_time = dt_time(15, 30)  # 3:30 PM IST
+                # EXIT ALL POSITIONS AT 3:40 PM IST
+                market_exit_time = dt_time(15, 40)  # 3:40 PM IST
                 
                 if now.time() >= market_exit_time:
                     print(f"\n[MARKET CLOSE] Current time: {now.strftime('%H:%M:%S')} - Initiating shutdown")
