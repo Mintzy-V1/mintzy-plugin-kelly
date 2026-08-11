@@ -1,0 +1,242 @@
+[
+  {
+    "symbol": "ADANIENT-EQ",
+    "exchange_token": "25",
+    "exchange": "NSE"
+  },
+  {
+    "symbol": "ADANIPORTS-EQ",
+    "exchange_token": "15083",
+    "exchange": "NSE"
+  },
+  {
+    "symbol": "ADANIPOWER-EQ",
+    "exchange_token": "17388",
+    "exchange": "NSE"
+  },
+  {
+    "symbol": "AMBUJACEM-EQ",
+    "exchange_token": "1270",
+    "exchange": "NSE"
+  },
+  {
+    "symbol": "ASIANPAINT-EQ",
+    "exchange_token": "236",
+    "exchange": "NSE"
+  },
+  {
+    "symbol": "AXISBANK-EQ",
+    "exchange_token": "5900",
+    "exchange": "NSE"
+  },
+  {
+    "symbol": "BAJAJFINSV-EQ",
+    "exchange_token": "16675",
+    "exchange": "NSE"
+  },
+  {
+    "symbol": "BAJFINANCE-EQ",
+    "exchange_token": "317",
+    "exchange": "NSE"
+  },
+  {
+    "symbol": "BANKBARODA-EQ",
+    "exchange_token": "4668",
+    "exchange": "NSE"
+  },
+  {
+    "symbol": "BHARTIARTL-EQ",
+    "exchange_token": "10604",
+    "exchange": "NSE"
+  },
+  {
+    "symbol": "BRITANNIA-EQ",
+    "exchange_token": "547",
+    "exchange": "NSE"
+  },
+  {
+    "symbol": "CHOLAFIN-EQ",
+    "exchange_token": "685",
+    "exchange": "NSE"
+  },
+  {
+    "symbol": "COALINDIA-EQ",
+    "exchange_token": "20374",
+    "exchange": "NSE"
+  },
+  {
+    "symbol": "DIVISLAB-EQ",
+    "exchange_token": "10940",
+    "exchange": "NSE"
+  },
+  {
+    "symbol": "EICHERMOT-EQ",
+    "exchange_token": "910",
+    "exchange": "NSE"
+  },
+  {
+    "symbol": "GAIL-EQ",
+    "exchange_token": "4717",
+    "exchange": "NSE"
+  },
+  {
+    "symbol": "GODREJCP-EQ",
+    "exchange_token": "10099",
+    "exchange": "NSE"
+  },
+  {
+    "symbol": "GRASIM-EQ",
+    "exchange_token": "1232",
+    "exchange": "NSE"
+  },
+  {
+    "symbol": "HCLTECH-EQ",
+    "exchange_token": "7229",
+    "exchange": "NSE"
+  },
+  {
+    "symbol": "HDFCBANK-EQ",
+    "exchange_token": "1333",
+    "exchange": "NSE"
+  },
+  {
+    "symbol": "HDFCLIFE-EQ",
+    "exchange_token": "467",
+    "exchange": "NSE"
+  },
+  {
+    "symbol": "HEROMOTOCO-EQ",
+    "exchange_token": "1348",
+    "exchange": "NSE"
+  },
+  {
+    "symbol": "HINDALCO-EQ",
+    "exchange_token": "1363",
+    "exchange": "NSE"
+  },
+  {
+    "symbol": "HINDUNILVR-EQ",
+    "exchange_token": "1394",
+    "exchange": "NSE"
+  },
+  {
+    "symbol": "HINDZINC-EQ",
+    "exchange_token": "1424",
+    "exchange": "NSE"
+  },
+  {
+    "symbol": "ICICIBANK-EQ",
+    "exchange_token": "4963",
+    "exchange": "NSE"
+  },
+  {
+    "symbol": "INDIGO-EQ",
+    "exchange_token": "11195",
+    "exchange": "NSE"
+  },
+  {
+    "symbol": "INFY-EQ",
+    "exchange_token": "1594",
+    "exchange": "NSE"
+  },
+  {
+    "symbol": "ITC-EQ",
+    "exchange_token": "1660",
+    "exchange": "NSE"
+  },
+  {
+    "symbol": "JSWSTEEL-EQ",
+    "exchange_token": "11723",
+    "exchange": "NSE"
+  },
+  {
+    "symbol": "KOTAKBANK-EQ",
+    "exchange_token": "1922",
+    "exchange": "NSE"
+  },
+  {
+    "symbol": "LTIM-EQ",
+    "exchange_token": "17818",
+    "exchange": "NSE"
+  },
+  {
+    "symbol": "MARUTI-EQ",
+    "exchange_token": "10999",
+    "exchange": "NSE"
+  },
+  {
+    "symbol": "NESTLEIND-EQ",
+    "exchange_token": "17963",
+    "exchange": "NSE"
+  },
+  {
+    "symbol": "NTPC-EQ",
+    "exchange_token": "11630",
+    "exchange": "NSE"
+  },
+  {
+    "symbol": "ONGC-EQ",
+    "exchange_token": "2475",
+    "exchange": "NSE"
+  },
+  {
+    "symbol": "PIDILITIND-EQ",
+    "exchange_token": "2664",
+    "exchange": "NSE"
+  },
+  {
+    "symbol": "POWERGRID-EQ",
+    "exchange_token": "14977",
+    "exchange": "NSE"
+  },
+  {
+    "symbol": "SBILIFE-EQ",
+    "exchange_token": "21808",
+    "exchange": "NSE"
+  },
+  {
+    "symbol": "SBIN-EQ",
+    "exchange_token": "3045",
+    "exchange": "NSE"
+  },
+  {
+    "symbol": "SUNPHARMA-EQ",
+    "exchange_token": "3351",
+    "exchange": "NSE"
+  },
+  {
+    "symbol": "TATAPOWER-EQ",
+    "exchange_token": "3426",
+    "exchange": "NSE"
+  },
+  {
+    "symbol": "TATASTEEL-EQ",
+    "exchange_token": "3499",
+    "exchange": "NSE"
+  },
+  {
+    "symbol": "TCS-EQ",
+    "exchange_token": "11536",
+    "exchange": "NSE"
+  },
+  {
+    "symbol": "TVSMOTOR-EQ",
+    "exchange_token": "8479",
+    "exchange": "NSE"
+  },
+  {
+    "symbol": "ULTRACEMCO-EQ",
+    "exchange_token": "11532",
+    "exchange": "NSE"
+  },
+  {
+    "symbol": "VEDL-EQ",
+    "exchange_token": "3063",
+    "exchange": "NSE"
+  },
+  {
+    "symbol": "WIPRO-EQ",
+    "exchange_token": "3787",
+    "exchange": "NSE"
+  }
+]

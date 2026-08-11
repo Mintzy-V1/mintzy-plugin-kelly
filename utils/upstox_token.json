@@ -1,0 +1,33 @@
+{
+    "email": "tanmaychaturvedimgs@gmail.com",
+    "exchanges": [
+        "CDS",
+        "MCX",
+        "NFO",
+        "BFO",
+        "BCD",
+        "BSE",
+        "NSE"
+    ],
+    "products": [
+        "OCO",
+        "D",
+        "CO",
+        "I"
+    ],
+    "broker": "UPSTOX",
+    "user_id": "44CVSF",
+    "user_name": "Tanmay Chaturvedi",
+    "order_types": [
+        "MARKET",
+        "LIMIT",
+        "SL",
+        "SL-M"
+    ],
+    "user_type": "individual",
+    "poa": false,
+    "ddpi": false,
+    "is_active": true,
+    "access_token": "eyJ0eXAiOiJKV1QiLCJrZXlfaWQiOiJza192MS4wIiwiYWxnIjoiSFMyNTYifQ.eyJzdWIiOiI0NENWU0YiLCJqdGkiOiI2OTM2YWFkMTEzNDViMDViMzMyMWEwMzgiLCJpc011bHRpQ2xpZW50IjpmYWxzZSwiaXNQbHVzUGxhbiI6dHJ1ZSwiaWF0IjoxNzY1MTkwMzUzLCJpc3MiOiJ1ZGFwaS1nYXRld2F5LXNlcnZpY2UiLCJleHAiOjE3NjUyMzEyMDB9.d1WdBTtfr04pjWvMY8DyPDDpW6zwyYMeBN8Q8LoUIgk",
+    "extended_token": null
+}
