@@ -1,0 +1,1065 @@
+IlJFRlJFU0gtVE9LRU4iLCJSRUZSRVNILVRPS0VOIjoiZXlKaGJHY2lPaUpTVXpJMU5pSXNJblI1
+Y0NJNklrcFhWQ0o5LmV5SjFjMlZ5WDNSNWNHVWlPaUpqYkdsbGJuUWlMQ0owYjJ0bGJsOTBlWEJs
+SWpvaWRISmhaR1ZmY21WbWNtVnphRjkwYjJ0bGJpSXNJbWR0WDJsa0lqb3dMQ0p6YjNWeVkyVWlP
+aUl6SWl3aVpHVjJhV05sWDJsa0lqb2lPV1kzWm1ZMU0yWXRNakU0WXkwell6Y3pMV0ppTVdNdFpE
+VmpPR0l4WmpRNVpqQmpJaXdpYTJsa0lqb2lkSEpoWkdWZmEyVjVYM1l5SWl3aWIyMXVaVzFoYm1G
+blpYSnBaQ0k2TUN3aWFYTnpJam9pYkc5bmFXNWZjMlZ5ZG1salpTSXNJbk4xWWlJNklsUTFNVFV4
+TVRFME1DSXNJbVY0Y0NJNk1UYzRNakU0TnpFNU1pd2libUptSWpveE56Z3lNVEF3TmpFeUxDSnBZ
+WFFpT2pFM09ESXhNREEyTVRJc0ltcDBhU0k2SWpZeVpEQTRPVEk0TFdVd1l6VXRORE5qTlMxaVpH
+RXdMVFU1TlRBNVpUY3laRGRoWkNJc0lsUnZhMlZ1SWpvaUluMC5hZ3dpZU5vY2I4SHZEdzM2SzE3
+a25hTUdhXzVTTXV4NjRHMnhvaDhLQ3l6UzhfbWVGSjdYUlFmVGJoaUVyOV9XYldCelh0cGVRMXZS
+Y1l5N1l6Yno2R0VHQXZ4b003Z3lOcW5UVlFmM0F0VjVpZnBLNXFUU21NVVZ3TEVyTE8zdG83ck44
+eFlXMzdseXRJNlhYaTlIcVNzajVuVzUwTEZYaGhxMDIweEUxc1kiLCJpYXQiOjE3ODIxMDA3OTJ9
+._l7-YhR0n2JSU346zA7UrxmQdACHXNzET7w6RcF1UFBhmWnnu1n7Z0GIcuY9tLW_tSjQLHgchZS
+GkNx8dYwBYA', 'feed_token': 'eyJhbGciOiJIUzUxMiJ9.eyJ1c2VybmFtZSI6IlQ1MTUxMT
+E0MCIsImlhdCI6MTc4MjEwMDc5MiwiZXhwIjoxNzgyMTg3MTkyfQ.IRJKtQk0wQ6RYC6BcT3VH1F
+oOJPcMN32sKjfPBacgigx-MseaCSWOOQ_rh-8hT_T5y8l7Wtog3H7-pNd4eFm7A', 'obj': <Sm
+artApi.smartConnect.SmartConnect object at 0xffff6c534190>}
+
+[AUTH DEBUG] Evaluating auth error
+[AUTH DEBUG] status=True
+[AUTH DEBUG] message='success'
+[AUTH DEBUG] errorcode=''
+[AUTH DEBUG] Ã’ÆÃÂ¢Ã’Â¢Ã¢â¬aÂ¬ Ã’Â¢Ã¢â¬aÂ¬Ã¢â¬~Â¢ NOT an auth error
+
+========== ACCOUNT SUMMARY ==========
+Available Cash: Ã’ÆÃ â¬"Ã’â¬aÃÂ¢Ã’ÆÃÂ¢Ã’Â¢Ã¢â¬Å¡ÃÂ¬Ã’â¬¦ÃÂ¡Ã’ÆÃ¢â¬Å
+¡Ã’â¬aÃÂ¹110,000.00
+Collateral: Ã’ÆÃ â¬"Ã’â¬aÃÂ¢Ã’ÆÃÂ¢Ã’Â¢Ã¢â¬Å¡ÃÂ¬Ã’â¬¦ÃÂ¡Ã’ÆÃ¢â¬Å¡Ã’â
+¬aÃÂ¹0.00
+M2M Realized: Ã’ÆÃ â¬"Ã’â¬aÃÂ¢Ã’ÆÃÂ¢Ã’Â¢Ã¢â¬Å¡ÃÂ¬Ã’â¬¦ÃÂ¡Ã’ÆÃ¢â¬Å¡Ã
+’â¬aÃÂ¹0.00
+M2M Unrealized: Ã’ÆÃ â¬"Ã’â¬aÃÂ¢Ã’ÆÃÂ¢Ã’Â¢Ã¢â¬Å¡ÃÂ¬Ã’â¬¦ÃÂ¡Ã’ÆÃ¢â¬Å
+¡Ã’â¬aÃÂ¹0.00
+=====================================
+
+
+[AUTH DEBUG] Evaluating auth error
+[AUTH DEBUG] status=True
+[AUTH DEBUG] message='success'
+[AUTH DEBUG] errorcode=''
+[AUTH DEBUG] Ã’ÆÃÂ¢Ã’Â¢Ã¢â¬aÂ¬ Ã’Â¢Ã¢â¬aÂ¬Ã¢â¬~Â¢ NOT an auth error
+
+[AUTH DEBUG] Evaluating auth error
+[AUTH DEBUG] status=True
+[AUTH DEBUG] message='success'
+[AUTH DEBUG] errorcode=''
+[AUTH DEBUG] Ã’ÆÃÂ¢Ã’Â¢Ã¢â¬aÂ¬ Ã’Â¢Ã¢â¬aÂ¬Ã¢â¬~Â¢ NOT an auth error
+broker object is  <broker_angle.BrokerConnector object at 0xffff6c5365d0>
+saving data in db using persist to db
+session data  {'session_id': 'session_20260622035939_4dbcb565', 'user_id': '
+68b4467ef4ea607d01004187', 'api_key': '2pKOv1sa', 'client_code': 'T51511140'
+, 'password': '6336', 'created_at': '2026-06-22T03:59:39.968716', 'status':
+'authenticated', 'broker': <broker_angle.BrokerConnector object at 0xffff6c5
+365d0>, 'broker_session': {'user': 'T51511140', 'token': 'Bearer eyJhbGciOiJ
+IUzUxMiJ9.eyJ1c2VybmFtZSI6IlQ1MTUxMTE0MCIsInJvbGVzIjowLCJ1c2VydHlwZSI6IlVTRV
+IiLCJ0b2tlbiI6ImV5SmhiR2NpT2lKU1V6STFOaUlzSW5SNWNDSTZJa3BYVkNKOS5leUoxYzJWeV
+gzUjVjR1VpT2lKamJHbGxiblFpTENKMGIydGxibDkwZVhCbElqb2lkSEpoWkdWZllXTmpaWE56WD
+NSdmEyVnVJaXdpWjIxZmFXUWlPakV6TENKemIzVnlZMlVpT2lJeklpd2laR1YyYVdObFgybGtJam
+9pT1dZM1ptWTFNMll0TWpFNFl5MHpZemN6TFdKaU1XTXRaRFZqT0dJeFpqUTVaakJqSWl3aWEybG
+tJam9pZEhKaFpHVmZhMlY1WDNZeUlpd2liMjF1WlcxaGJtRm5aWEpwWkNJNk1UTXNJbkJ5YjJSMV
+kzUnpJanA3SW1SbGJXRjBJanA3SW5OMFlYUjFjeUk2SW1GamRHbDJaU0o5TENKdFppSTZleUp6ZE
+dGMGRYTWlPaUpoWTNScGRtVWlmWDBzSW1semN5STZJblJ5WVdSbFgyeHZaMmx1WDNObGNuWnBZMl
+VpTENKemRXSWlPaUpVTlRFMU1URXhOREFpTENKbGVIQWlPakUzT0RJeE9EY3hPVElzSW01aVppST
+ZNVGM0TWpFd01EWXhNaXdpYVdGMElqb3hOemd5TVRBd05qRXlMQ0pxZEdraU9pSmlaRFl5WlRWaF
+pDMWpNelEzTFRReFl6Y3RPVFE0WWkxaE5EVXhNRFEwTmpBM05tWWlMQ0pVYjJ0bGJpSTZJaUo5Ll
+FmdWEwNkN1LTVIeDk0aGVETnBld2xmakRSaTc4LVMxSzk2YjRpZXFoc1RKTHJMZGFOZkR2aWplTH
+ItN0VDTHMxYk52aTB2SV9iaVlBNXRqSmNFUHU1R3hYcHpHTHJ5aHROVXQtUjd1blJ0X0JvTUtzdW
+plQ1IwTjJaeGFrYjZURHdmQUdVVldHUlJHcTdOWTNpOTM2SWtKMDFBQlBLQ2JCSmdzRlJJdThrQS
+IsIkFQSS1LRVkiOiIycEtPdjFzYSIsImlhdCI6MTc4MjEwMDc5MiwiZXhwIjoxNzgyMTUzMDAwfQ
+.LEz1QwUCo2BFJR62IkAE2O0bPVJxnj7m_ka7nFGFH9aCH5Mxx_RWBYpC3x_qHnUOvAcTZNqqSVa
+Hurm9_vuRGg', 'refresh_token': 'eyJhbGciOiJIUzUxMiJ9.eyJ0b2tlbiI6IlJFRlJFU0g
+tVE9LRU4iLCJSRUZSRVNILVRPS0VOIjoiZXlKaGJHY2lPaUpTVXpJMU5pSXNJblI1Y0NJNklrcFh
+WQ0o5LmV5SjFjMlZ5WDNSNWNHVWlPaUpqYkdsbGJuUWlMQ0owYjJ0bGJsOTBlWEJsSWpvaWRISmh
+aR1ZmY21WbWNtVnphRjkwYjJ0bGJpSXNJbWR0WDJsa0lqb3dMQ0p6YjNWeVkyVWlPaUl6SWl3aVp
+HVjJhV05sWDJsa0lqb2lPV1kzWm1ZMU0yWXRNakU0WXkwell6Y3pMV0ppTVdNdFpEVmpPR0l4Wmp
+RNVpqQmpJaXdpYTJsa0lqb2lkSEpoWkdWZmEyVjVYM1l5SWl3aWIyMXVaVzFoYm1GblpYSnBaQ0k
+2TUN3aWFYTnpJam9pYkc5bmFXNWZjMlZ5ZG1salpTSXNJbk4xWWlJNklsUTFNVFV4TVRFME1DSXN
+JbVY0Y0NJNk1UYzRNakU0TnpFNU1pd2libUptSWpveE56Z3lNVEF3TmpFeUxDSnBZWFFpT2pFM09
+ESXhNREEyTVRJc0ltcDBhU0k2SWpZeVpEQTRPVEk0TFdVd1l6VXRORE5qTlMxaVpHRXdMVFU1TlR
+BNVpUY3laRGRoWkNJc0lsUnZhMlZ1SWpvaUluMC5hZ3dpZU5vY2I4SHZEdzM2SzE3a25hTUdhXzV
+TTXV4NjRHMnhvaDhLQ3l6UzhfbWVGSjdYUlFmVGJoaUVyOV9XYldCelh0cGVRMXZSY1l5N1l6Yno
+2R0VHQXZ4b003Z3lOcW5UVlFmM0F0VjVpZnBLNXFUU21NVVZ3TEVyTE8zdG83ck44eFlXMzdseXR
+JNlhYaTlIcVNzajVuVzUwTEZYaGhxMDIweEUxc1kiLCJpYXQiOjE3ODIxMDA3OTJ9._l7-YhR0n2
+JSU346zA7UrxmQdACHXNzET7w6RcF1UFBhmWnnu1n7Z0GIcuY9tLW_tSjQLHgchZSGkNx8dYwBYA
+', 'feed_token': 'eyJhbGciOiJIUzUxMiJ9.eyJ1c2VybmFtZSI6IlQ1MTUxMTE0MCIsImlhd
+CI6MTc4MjEwMDc5MiwiZXhwIjoxNzgyMTg3MTkyfQ.IRJKtQk0wQ6RYC6BcT3VH1FoOJPcMN32sK
+jfPBacgigx-MseaCSWOOQ_rh-8hT_T5y8l7Wtog3H7-pNd4eFm7A', 'obj': <SmartApi.smar
+tConnect.SmartConnect object at 0xffff6c534190>}, 'free_cash': 110000.0, 'au
+thenticated_at': '2026-06-22T03:59:56.808659'}
+status data  {}
+inside the persist session metadata
+inside the persist session metadata sync
+inside the ensure session doc
+updating the sessions_collection
+cleaning up env variables
+inside the persist session metadata
+inside the persist session metadata sync
+inside the ensure session doc
+updating the sessions_collection
+<coroutine object fetch_session_from_db at 0xffff6c536200>
+/home/admin/mintzy-plugin/venv/lib/python3.13/site-packages/fastapi/routing.
+py:344: RuntimeWarning: coroutine 'fetch_session_from_db' was never awaited
+  return await dependant.call(**values)
+RuntimeWarning: Enable tracemalloc to get the object allocation traceback
+session_data {'session_id': 'session_20260622035939_4dbcb565', 'status': 'au
+thenticated', 'free_cash': 110000.0, 'created_at': datetime.datetime(2026, 6
+, 22, 3, 59, 39, 970000), 'authenticated_at': datetime.datetime(2026, 6, 22,
+ 3, 59, 56, 999000), 'strategy': 'A', 'api_key': '2pKOv1sa', 'client_code':
+'T51511140', 'password': '6336', 'broker_session': {'user': 'T51511140', 'to
+ken': 'Bearer eyJhbGciOiJIUzUxMiJ9.eyJ1c2VybmFtZSI6IlQ1MTUxMTE0MCIsInJvbGVzI
+jowLCJ1c2VydHlwZSI6IlVTRVIiLCJ0b2tlbiI6ImV5SmhiR2NpT2lKU1V6STFOaUlzSW5SNWNDS
+TZJa3BYVkNKOS5leUoxYzJWeVgzUjVjR1VpT2lKamJHbGxiblFpTENKMGIydGxibDkwZVhCbElqb
+2lkSEpoWkdWZllXTmpaWE56WDNSdmEyVnVJaXdpWjIxZmFXUWlPakV6TENKemIzVnlZMlVpT2lJe
+klpd2laR1YyYVdObFgybGtJam9pT1dZM1ptWTFNMll0TWpFNFl5MHpZemN6TFdKaU1XTXRaRFZqT
+0dJeFpqUTVaakJqSWl3aWEybGtJam9pZEhKaFpHVmZhMlY1WDNZeUlpd2liMjF1WlcxaGJtRm5aW
+EpwWkNJNk1UTXNJbkJ5YjJSMVkzUnpJanA3SW1SbGJXRjBJanA3SW5OMFlYUjFjeUk2SW1GamRHb
+DJaU0o5TENKdFppSTZleUp6ZEdGMGRYTWlPaUpoWTNScGRtVWlmWDBzSW1semN5STZJblJ5WVdSb
+FgyeHZaMmx1WDNObGNuWnBZMlVpTENKemRXSWlPaUpVTlRFMU1URXhOREFpTENKbGVIQWlPakUzT
+0RJeE9EY3hPVElzSW01aVppSTZNVGM0TWpFd01EWXhNaXdpYVdGMElqb3hOemd5TVRBd05qRXlMQ
+0pxZEdraU9pSmlaRFl5WlRWaFpDMWpNelEzTFRReFl6Y3RPVFE0WWkxaE5EVXhNRFEwTmpBM05tW
+WlMQ0pVYjJ0bGJpSTZJaUo5LlFmdWEwNkN1LTVIeDk0aGVETnBld2xmakRSaTc4LVMxSzk2YjRpZ
+XFoc1RKTHJMZGFOZkR2aWplTHItN0VDTHMxYk52aTB2SV9iaVlBNXRqSmNFUHU1R3hYcHpHTHJ5a
+HROVXQtUjd1blJ0X0JvTUtzdWplQ1IwTjJaeGFrYjZURHdmQUdVVldHUlJHcTdOWTNpOTM2SWtKM
+DFBQlBLQ2JCSmdzRlJJdThrQSIsIkFQSS1LRVkiOiIycEtPdjFzYSIsImlhdCI6MTc4MjEwMDc5M
+iwiZXhwIjoxNzgyMTUzMDAwfQ.LEz1QwUCo2BFJR62IkAE2O0bPVJxnj7m_ka7nFGFH9aCH5Mxx_
+RWBYpC3x_qHnUOvAcTZNqqSVaHurm9_vuRGg', 'refresh_token': 'eyJhbGciOiJIUzUxMiJ
+9.eyJ0b2tlbiI6IlJFRlJFU0gtVE9LRU4iLCJSRUZSRVNILVRPS0VOIjoiZXlKaGJHY2lPaUpTVX
+pJMU5pSXNJblI1Y0NJNklrcFhWQ0o5LmV5SjFjMlZ5WDNSNWNHVWlPaUpqYkdsbGJuUWlMQ0owYj
+J0bGJsOTBlWEJsSWpvaWRISmhaR1ZmY21WbWNtVnphRjkwYjJ0bGJpSXNJbWR0WDJsa0lqb3dMQ0
+p6YjNWeVkyVWlPaUl6SWl3aVpHVjJhV05sWDJsa0lqb2lPV1kzWm1ZMU0yWXRNakU0WXkwell6Y3
+pMV0ppTVdNdFpEVmpPR0l4WmpRNVpqQmpJaXdpYTJsa0lqb2lkSEpoWkdWZmEyVjVYM1l5SWl3aW
+IyMXVaVzFoYm1GblpYSnBaQ0k2TUN3aWFYTnpJam9pYkc5bmFXNWZjMlZ5ZG1salpTSXNJbk4xWW
+lJNklsUTFNVFV4TVRFME1DSXNJbVY0Y0NJNk1UYzRNakU0TnpFNU1pd2libUptSWpveE56Z3lNVE
+F3TmpFeUxDSnBZWFFpT2pFM09ESXhNREEyTVRJc0ltcDBhU0k2SWpZeVpEQTRPVEk0TFdVd1l6VX
+RORE5qTlMxaVpHRXdMVFU1TlRBNVpUY3laRGRoWkNJc0lsUnZhMlZ1SWpvaUluMC5hZ3dpZU5vY2
+I4SHZEdzM2SzE3a25hTUdhXzVTTXV4NjRHMnhvaDhLQ3l6UzhfbWVGSjdYUlFmVGJoaUVyOV9XYl
+dCelh0cGVRMXZSY1l5N1l6Yno2R0VHQXZ4b003Z3lOcW5UVlFmM0F0VjVpZnBLNXFUU21NVVZ3TE
+VyTE8zdG83ck44eFlXMzdseXRJNlhYaTlIcVNzajVuVzUwTEZYaGhxMDIweEUxc1kiLCJpYXQiOj
+E3ODIxMDA3OTJ9._l7-YhR0n2JSU346zA7UrxmQdACHXNzET7w6RcF1UFBhmWnnu1n7Z0GIcuY9t
+LW_tSjQLHgchZSGkNx8dYwBYA', 'feed_token': 'eyJhbGciOiJIUzUxMiJ9.eyJ1c2VybmFt
+ZSI6IlQ1MTUxMTE0MCIsImlhdCI6MTc4MjEwMDc5MiwiZXhwIjoxNzgyMTg3MTkyfQ.IRJKtQk0w
+Q6RYC6BcT3VH1FoOJPcMN32sKjfPBacgigx-MseaCSWOOQ_rh-8hT_T5y8l7Wtog3H7-pNd4eFm7
+A'}}
+[START-TRADING-DEBUG] Request received. Config=session_id='session_202606220
+35939_4dbcb565' strategy='B' symbols=[StockAllocation(symbol='ITC', capital=
+500.0, stop_loss=0.05), StockAllocation(symbol='GAIL', capital=500.0, stop_l
+oss=0.05), StockAllocation(symbol='NTPC', capital=500.0, stop_loss=0.05), St
+ockAllocation(symbol='ONGC', capital=500.0, stop_loss=0.05), StockAllocation
+(symbol='TATASTEEL', capital=500.0, stop_loss=0.05), StockAllocation(symbol=
+'VEDL', capital=500.0, stop_loss=0.05), StockAllocation(symbol='BANKBARODA',
+ capital=500.0, stop_loss=0.05), StockAllocation(symbol='HDFCBANK', capital=
+1200.0, stop_loss=0.05), StockAllocation(symbol='BAJAJFINSV', capital=1200.0
+, stop_loss=0.05)] time_frame='3 hours' use_broker_cash=True candle='15m'
+[SYNC-DEBUG] get_or_restore_session called for session_20260622035939_4dbcb5
+65
+[SYNC-DEBUG] Local RAM status: None
+[SYNC-DEBUG] Fetching from DB for session_20260622035939_4dbcb565
+[SYNC-DEBUG] DB status: authenticated
+[I 260622 04:03:01 smartConnect:124] in pool
+self.obj in restore session <SmartApi.smartConnect.SmartConnect object at 0x
+ffff6c538050>
+[SYNC-DEBUG] Successfully restored session from DB and updated RAM
+inside the persist session metadata sync
+inside the ensure session doc
+updating the sessions_collection
+PID: 5487 session_id: session_20260622035939_4dbcb565
+PID: 5487 Thread: MainThread sessions_store_keys: ['session_20260621175624_0
+e599404', 'session_20260621175808_52b64d54', 'session_20260622035939_4dbcb56
+5']
+[START-TRADING-DEBUG] Retrieved session_data: dict_keys(['session_id', 'api_
+key', 'client_code', 'password', 'status', 'free_cash', 'broker_session', 'b
+roker', 'authenticated_at', 'created_at', 'user_id', 'strategy', 'symbols'])
+[START-TRADING-DEBUG] Session Status: authenticated
+inside the persist session metadata sync
+inside the ensure session doc
+updating the sessions_collection
+[API SERVER] Symbols payload: [{'symbol': 'ITC', 'capital': 500.0, 'stop_los
+s': 0.05}, {'symbol': 'GAIL', 'capital': 500.0, 'stop_loss': 0.05}, {'symbol
+': 'NTPC', 'capital': 500.0, 'stop_loss': 0.05}, {'symbol': 'ONGC', 'capital
+': 500.0, 'stop_loss': 0.05}, {'symbol': 'TATASTEEL', 'capital': 500.0, 'sto
+p_loss': 0.05}, {'symbol': 'VEDL', 'capital': 500.0, 'stop_loss': 0.05}, {'s
+ymbol': 'BANKBARODA', 'capital': 500.0, 'stop_loss': 0.05}, {'symbol': 'HDFC
+BANK', 'capital': 1200.0, 'stop_loss': 0.05}, {'symbol': 'BAJAJFINSV', 'capi
+tal': 1200.0, 'stop_loss': 0.05}]
+inside the persist session metadata sync
+inside the ensure session doc
+updating the sessions_collection
+[SessionManager] Starting session session_20260622035939_4dbcb565
+  Strategy: B
+  Symbols: ['ITC', 'GAIL', 'NTPC', 'ONGC', 'TATASTEEL', 'VEDL', 'BANKBARODA'
+, 'HDFCBANK', 'BAJAJFINSV']
+  Allocations: {'ITC': {'capital': 500.0, 'stop_loss': 0.05}, 'GAIL': {'capi
+tal': 500.0, 'stop_loss': 0.05}, 'NTPC': {'capital': 500.0, 'stop_loss': 0.0
+5}, 'ONGC': {'capital': 500.0, 'stop_loss': 0.05}, 'TATASTEEL': {'capital':
+500.0, 'stop_loss': 0.05}, 'VEDL': {'capital': 500.0, 'stop_loss': 0.05}, 'B
+ANKBARODA': {'capital': 500.0, 'stop_loss': 0.05}, 'HDFCBANK': {'capital': 1
+200.0, 'stop_loss': 0.05}, 'BAJAJFINSV': {'capital': 1200.0, 'stop_loss': 0.
+05}}
+[SessionManager] Redis mein save kiya Ã¢â¬â¬ session=session_20260622035939
+_4dbcb565 pid=5852
+[SessionManager] Session session_20260622035939_4dbcb565 started in process
+5852
+[I 260622 04:03:02 smartConnect:124] in pool
+self.obj in restore session <SmartApi.smartConnect.SmartConnect object at 0x
+ffff7c0e9cd0>
+[PRED CLIENT INIT] URL=http://54.204.215.28:8000/predict, API_KEY=XeyJhbGciO
+iJIUzI1NiIsInR5cCI6I...
+[MARKET CLIENT] Redis connected
+[ASYNC-CSV] writer thread started (batch=100, flush_interval=0.5s, max_queue
+=20000)
+[Worker-session_20260622035939_4dbcb565] Starting trader with 9 symbols
+[Worker-session_20260622035939_4dbcb565] Wiring LiveLTPStream -> trader.on_l
+tp_tick (callable=True) symbols=['ITC', 'GAIL', 'NTPC', 'ONGC', 'TATASTEEL',
+ 'VEDL', 'BANKBARODA', 'HDFCBANK', 'BAJAJFINSV']
+[LTP-WS] start() requested for 9 symbols: ['ITC', 'GAIL', 'NTPC', 'ONGC', 'T
+ATASTEEL', 'VEDL', 'BANKBARODA', 'HDFCBANK', 'BAJAJFINSV']
+[BROKER WS-CREDS] client=T51511140 auth_token=OK feed_token=OK api_key=OK
+[LTP-WS] resolved 9/9 tokens; map={'1660': 'ITC', '4717': 'GAIL', '11630': '
+NTPC', '2475': 'ONGC', '3499': 'TATASTEEL', '3063': 'VEDL', '4668': 'BANKBAR
+ODA', '1333': 'HDFCBANK', '16675': 'BAJAJFINSV'}
+[Worker-session_20260622035939_4dbcb565] LiveLTPStream started for 9 symbols
+
+[AUTH DEBUG] Evaluating auth error
+[AUTH DEBUG] status=True
+[AUTH DEBUG] message='success'
+[AUTH DEBUG] errorcode=''
+[AUTH DEBUG] Ã’ÆÃÂ¢Ã’Â¢Ã¢â¬aÂ¬ Ã’Â¢Ã¢â¬aÂ¬Ã¢â¬~Â¢ NOT an auth error
+
+========== ACCOUNT SUMMARY ==========
+Available Cash: Ã’ÆÃ â¬"Ã’â¬aÃÂ¢Ã’ÆÃÂ¢Ã’Â¢Ã¢â¬Å¡ÃÂ¬Ã’â¬¦ÃÂ¡Ã’ÆÃ¢â¬Å
+¡Ã’â¬aÃÂ¹110,000.00
+Collateral: Ã’ÆÃ â¬"Ã’â¬aÃÂ¢Ã’ÆÃÂ¢Ã’Â¢Ã¢â¬Å¡ÃÂ¬Ã’â¬¦ÃÂ¡Ã’ÆÃ¢â¬Å¡Ã’â
+¬aÃÂ¹0.00
+M2M Realized: Ã’ÆÃ â¬"Ã’â¬aÃÂ¢Ã’ÆÃÂ¢Ã’Â¢Ã¢â¬Å¡ÃÂ¬Ã’â¬¦ÃÂ¡Ã’ÆÃ¢â¬Å¡Ã
+’â¬aÃÂ¹0.00
+M2M Unrealized: Ã’ÆÃ â¬"Ã’â¬aÃÂ¢Ã’ÆÃÂ¢Ã’Â¢Ã¢â¬Å¡ÃÂ¬Ã’â¬¦ÃÂ¡Ã’ÆÃ¢â¬Å
+¡Ã’â¬aÃÂ¹0.00
+=====================================
+
+
+[AUTH DEBUG] Evaluating auth error
+[AUTH DEBUG] status=True
+[AUTH DEBUG] message='success'
+[AUTH DEBUG] errorcode=''
+[AUTH DEBUG] Ã’ÆÃÂ¢Ã’Â¢Ã¢â¬aÂ¬ Ã’Â¢Ã¢â¬aÂ¬Ã¢â¬~Â¢ NOT an auth error
+
+[AUTH DEBUG] Evaluating auth error
+[AUTH DEBUG] status=True
+[AUTH DEBUG] message='success'
+[AUTH DEBUG] errorcode=''
+[AUTH DEBUG] Ã’ÆÃÂ¢Ã’Â¢Ã¢â¬aÂ¬ Ã’Â¢Ã¢â¬aÂ¬Ã¢â¬~Â¢ NOT an auth error
+[INFO] Free cash detected: 110,000.00
+Broker free cash / available margin: 110,000.00
+[2026-06-22 04:03:05] Broker free cash / available margin: 110,000.00
+[INFO]  Using broker cash as initial capital: 110,000.00
+[2026-06-22 04:03:05] Initial Capital set to broker cash: 110,000.00
+[RMS] Total allocated capital: Rs5,900.00 | Loss limit: Rs-29.50 (0.50% of c
+apital)
+[2026-06-22 04:03:05] RMS Loss Limit: Rs-29.50 (0.50% of Rs5,900.00 allocate
+d)
+
+[AUTH DEBUG] Evaluating auth error
+[AUTH DEBUG] status=True
+[AUTH DEBUG] message='success'
+[AUTH DEBUG] errorcode=''
+[AUTH DEBUG] Ã’ÆÃÂ¢Ã’Â¢Ã¢â¬aÂ¬ Ã’Â¢Ã¢â¬aÂ¬Ã¢â¬~Â¢ NOT an auth error
+[LTP-WS] connected
+[LTP-WS] subscribe sent mode=3(SNAP_QUOTE) tokens=9: ['1660', '4717', '11630
+', '2475', '3499', '3063', '4668', '1333', '16675']
+[LTP-WS] FIRST PAYLOAD (GAIL) keys=['subscription_mode', 'exchange_type', 't
+oken', 'sequence_number', 'exchange_timestamp', 'last_traded_price', 'subscr
+iption_mode_val', 'last_traded_quantity', 'average_traded_price', 'volume_tr
+ade_for_the_day', 'total_buy_quantity', 'total_sell_quantity', 'open_price_o
+f_the_day', 'high_price_of_the_day', 'low_price_of_the_day', 'closed_price',
+ 'last_traded_timestamp', 'open_interest', 'open_interest_change_percentage'
+, 'upper_circuit_limit', 'lower_circuit_limit', '52_week_high_price', '52_we
+ek_low_price', 'best_5_buy_data', 'best_5_sell_data']
+[LTP-WS] FIRST PAYLOAD raw={'subscription_mode': 3, 'exchange_type': 1, 'tok
+en': '4717', 'sequence_number': 2010203, 'exchange_timestamp': 1782100984000
+, 'last_traded_price': 17532, 'subscription_mode_val': 'SNAP_QUOTE', 'last_t
+raded_quantity': 2, 'average_traded_price': 17499, 'volume_trade_for_the_day
+': 268396, 'total_buy_quantity': 818421.0, 'total_sell_quantity': 1038019.0,
+ 'open_price_of_the_day': 17415, 'high_price_of_the_day': 17558, 'low_price_
+of_the_day': 17415, 'closed_price': 17390, 'last_traded_timestamp': 17821009
+78, 'open_interest': 135318300, 'open_interest_change_percentage': 457304042
+9485951582, 'upper_circuit_limit': 19129, 'lower_circuit_limit': 15651, '52_
+week_high_price': 19545, '52_week_low_price': 13436, 'best_5_buy_data': [{'f
+lag': 1, 'quantity': 21, 'price': 17525, 'no of orders': 2}, {'flag': 1, 'qu
+antity': 392, 'price': 17524, 'no of orders': 4}, {'flag': 1, 'quantity': 40
+1, 'price': 17523, 'no of orders': 2}, {'flag': 1, 'quantity': 381, 'price':
+ 17522, 'no of orders': 3}, {'flag': 1, 'quantity': 3178, 'price': 17521, 'n
+o of orders': 2}], 'best_5_sell_data': [{'flag': 0, 'quantity': 498, 'price'
+: 17532, 'no of orders': 1}, {'flag': 0, 'quantity': 115, 'price': 17534, 'n
+o of orders': 2}, {'flag': 0, 'quantity': 567, 'price': 17535, 'no of orders
+': 4}, {'flag': 0, 'quantity': 495, 'price': 17536, 'no of orders': 6}, {'fl
+ag': 0, 'quantity': 86, 'price': 17537, 'no of orders': 2}]}
+[LTP-WS] first tick for GAIL @ Rs175.28 (source=mid)
+[TRADER-TICK] GAIL tick received but no position yet (ltp=175.28)
+[LTP-WS] first tick for BAJAJFINSV @ Rs1766.65 (source=mid)
+[TRADER-TICK] BAJAJFINSV tick received but no position yet (ltp=1766.65)
+[LTP-WS] first tick for HDFCBANK @ Rs787.98 (source=mid)
+[TRADER-TICK] HDFCBANK tick received but no position yet (ltp=787.98)
+[LTP-WS] first tick for TATASTEEL @ Rs198.93 (source=mid)
+[TRADER-TICK] TATASTEEL tick received but no position yet (ltp=198.93)
+[LTP-WS] first tick for ONGC @ Rs246.97 (source=mid)
+[TRADER-TICK] ONGC tick received but no position yet (ltp=246.97)
+[LTP-WS] first tick for ITC @ Rs292.62 (source=mid)
+[TRADER-TICK] ITC tick received but no position yet (ltp=292.62)
+[LTP-WS] first tick for NTPC @ Rs365.05 (source=mid)
+[TRADER-TICK] NTPC tick received but no position yet (ltp=365.05)
+[LTP-WS] first tick for BANKBARODA @ Rs280.75 (source=mid)
+[TRADER-TICK] BANKBARODA tick received but no position yet (ltp=280.75)
+[LTP-WS] first tick for VEDL @ Rs303.85 (source=mid)
+[TRADER-TICK] VEDL tick received but no position yet (ltp=303.85)
+
+[AUTH DEBUG] Evaluating auth error
+[AUTH DEBUG] status=True
+[AUTH DEBUG] message='success'
+[AUTH DEBUG] errorcode=''
+[AUTH DEBUG] Ã’ÆÃÂ¢Ã’Â¢Ã¢â¬aÂ¬ Ã’Â¢Ã¢â¬aÂ¬Ã¢â¬~Â¢ NOT an auth error
+
+========== ACCOUNT SUMMARY ==========
+Available Cash: Ã’ÆÃ â¬"Ã’â¬aÃÂ¢Ã’ÆÃÂ¢Ã’Â¢Ã¢â¬Å¡ÃÂ¬Ã’â¬¦ÃÂ¡Ã’ÆÃ¢â¬Å
+¡Ã’â¬aÃÂ¹110,000.00
+Collateral: Ã’ÆÃ â¬"Ã’â¬aÃÂ¢Ã’ÆÃÂ¢Ã’Â¢Ã¢â¬Å¡ÃÂ¬Ã’â¬¦ÃÂ¡Ã’ÆÃ¢â¬Å¡Ã’â
+¬aÃÂ¹0.00
+M2M Realized: Ã’ÆÃ â¬"Ã’â¬aÃÂ¢Ã’ÆÃÂ¢Ã’Â¢Ã¢â¬Å¡ÃÂ¬Ã’â¬¦ÃÂ¡Ã’ÆÃ¢â¬Å¡Ã
+’â¬aÃÂ¹0.00
+M2M Unrealized: Ã’ÆÃ â¬"Ã’â¬aÃÂ¢Ã’ÆÃÂ¢Ã’Â¢Ã¢â¬Å¡ÃÂ¬Ã’â¬¦ÃÂ¡Ã’ÆÃ¢â¬Å
+¡Ã’â¬aÃÂ¹0.00
+=====================================
+
+
+[AUTH DEBUG] Evaluating auth error
+[AUTH DEBUG] status=True
+[AUTH DEBUG] message='success'
+[AUTH DEBUG] errorcode=''
+[AUTH DEBUG] Ã’ÆÃÂ¢Ã’Â¢Ã¢â¬aÂ¬ Ã’Â¢Ã¢â¬aÂ¬Ã¢â¬~Â¢ NOT an auth error
+
+[AUTH DEBUG] Evaluating auth error
+[AUTH DEBUG] status=True
+[AUTH DEBUG] message='success'
+[AUTH DEBUG] errorcode=''
+[AUTH DEBUG] Ã’ÆÃÂ¢Ã’Â¢Ã¢â¬aÂ¬ Ã’Â¢Ã¢â¬aÂ¬Ã¢â¬~Â¢ NOT an auth error
+[SEED-REALIZED] today's realized PnL loaded from broker: total=Rs0.00 per_sy
+mbol={} broker_m2m_realized=Rs0.0
+pending orders: defaultdict(<class 'list'>, {})
+[DEBUG] now=09:33:09 candle_key=2026-06-22 09:30 candle=15m
+[EXECUTE] Candle 2026-06-22 09:30 at 09:33:09
+
+============================================================================
+====
+[AUTO_TRADER] PREDICTION CYCLE START
+[AUTO_TRADER] Candle: 2026-06-22 09:30
+[AUTO_TRADER] symbols input: ['ITC', 'GAIL', 'NTPC', 'ONGC', 'TATASTEEL', 'V
+EDL', 'BANKBARODA', 'HDFCBANK', 'BAJAJFINSV']
+[AUTO_TRADER] len(symbols): 9
+[AUTO_TRADER] symbol_batches: [['ITC', 'GAIL', 'NTPC'], ['ONGC', 'TATASTEEL'
+, 'VEDL'], ['BANKBARODA', 'HDFCBANK', 'BAJAJFINSV']]
+[AUTO_TRADER] len(symbol_batches): 3
+[AUTO_TRADER] time_frame: 3 hours
+[AUTO_TRADER] candle: 15m
+[AUTO_TRADER] parameters: ['close']
+============================================================================
+====
+
+[TIMING] PREDICTION_BATCH_START  at 04:03:09.079
+[CANDLE] candle=15m > 5m, using prediction_candle=5m for _run_batch
+calling run batch function for batches
+inside the run batch function being called from for loop
+Ã’ÆÃ â¬"Ã’â¬ Ã¢â¬â¢Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂ°Ã’ÆÃ â¬"Ã’Â¢Ã¢â¬aÂ¬ÃÂ¦Ã’ÆÃ¢â¬Å
+¡Ã’â¬aÃÂ¸Ã’ÆÃ â¬"Ã’â¬aÃÂ¢Ã’ÆÃÂ¢Ã’Â¢Ã¢â¬aÂ¬Ã&Â¡Ã’â¬aÃÂ¬Ã’ÆÃ¢â¬Å¡Ã’â¬a
+ÃÂÃ’ÆÃ â¬"Ã’Â¢Ã¢â¬aÂ¬Ã&Â¡Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂ¥Ã’ÆÃ â¬"Ã’â¬ Ã¢â¬â¢Ã’ÆÃ¢â
+¬Å¡Ã’â¬aÃÂ°Ã’ÆÃ â¬"Ã’Â¢Ã¢â¬aÂ¬ÃÂ¦Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂ¸Ã’ÆÃ â¬"Ã’â¬aÃÂ¢Ã
+’ÆÃÂ¢Ã’Â¢Ã¢â¬aÂ¬Ã&Â¡Ã’â¬aÃÂ¬Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂÃ’ÆÃ â¬"Ã’Â¢Ã¢â¬aÂ¬Ã&Â¡Ã’
+ÆÃ¢â¬Å¡Ã’â¬aÃÂ¥Ã’ÆÃ â¬"Ã’â¬ Ã¢â¬â¢Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂ°Ã’ÆÃ â¬"Ã’Â¢Ã¢â
+¬aÂ¬ÃÂ¦Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂ¸Ã’ÆÃ â¬"Ã’â¬aÃÂ¢Ã’ÆÃÂ¢Ã’Â¢Ã¢â¬aÂ¬Ã&Â¡Ã’â¬aÃ
+Â¬Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂÃ’ÆÃ â¬"Ã’Â¢Ã¢â¬aÂ¬Ã&Â¡Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂ¥ PREDICTION
+ CLIENT ENTERED Ã’ÆÃ â¬"Ã’â¬ Ã¢â¬â¢Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂ°Ã’ÆÃ â¬"Ã’Â¢Ã¢â¬a
+Â¬ÃÂ¦Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂ¸Ã’ÆÃ â¬"Ã’â¬aÃÂ¢Ã’ÆÃÂ¢Ã’Â¢Ã¢â¬aÂ¬Ã&Â¡Ã’â¬aÃÂ¬
+Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂÃ’ÆÃ â¬"Ã’Â¢Ã¢â¬aÂ¬Ã&Â¡Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂ¥Ã’ÆÃ â¬"Ã’â¬
+ Ã¢â¬â¢Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂ°Ã’ÆÃ â¬"Ã’Â¢Ã¢â¬aÂ¬ÃÂ¦Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂ¸Ã’Æ
+Ã â¬"Ã’â¬aÃÂ¢Ã’ÆÃÂ¢Ã’Â¢Ã¢â¬aÂ¬Ã&Â¡Ã’â¬aÃÂ¬Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂÃ’ÆÃ â¬"Ã
+’Â¢Ã¢â¬aÂ¬Ã&Â¡Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂ¥Ã’ÆÃ â¬"Ã’â¬ Ã¢â¬â¢Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂ°
+Ã’ÆÃ â¬"Ã’Â¢Ã¢â¬aÂ¬ÃÂ¦Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂ¸Ã’ÆÃ â¬"Ã’â¬aÃÂ¢Ã’ÆÃÂ¢Ã’Â¢Ã¢
+â¬aÂ¬Ã&Â¡Ã’â¬aÃÂ¬Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂÃ’ÆÃ â¬"Ã’Â¢Ã¢â¬aÂ¬Ã&Â¡Ã’ÆÃ¢â¬Å¡Ã’â¬
+aÃÂ¥
+[PRED CLIENT] Ã’ÆÃ â¬"Ã’â¬ Ã¢â¬â¢Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂ¢Ã’ÆÃ â¬"Ã’â¬aÃÂ¢Ã’
+ÆÃÂ¢Ã’Â¢Ã¢â¬aÂ¬Ã&Â¡Ã’â¬aÃÂ¬ Ã’ÆÃ â¬"Ã’â¬aÃÂ¢Ã’ÆÃÂ¢Ã’Â¢Ã¢â¬aÂ¬Ã&Â¡Ã’â¬
+aÃÂ¬Ã’ÆÃÂ¢Ã’Â¢Ã¢â¬aÂ¬Ã&Â¾Ã’â¬aÃÂ¢ CALLED: tickers=['ITC', 'GAIL', 'NTPC'
+], time_frame=3 hours, candle=5m
+[PRED CLIENT] Payload built: 3 tickers
+inside the run batch function being called from for loop
+Ã’ÆÃ â¬"Ã’â¬ Ã¢â¬â¢Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂ°Ã’ÆÃ â¬"Ã’Â¢Ã¢â¬aÂ¬ÃÂ¦Ã’ÆÃ¢â¬Å
+¡Ã’â¬aÃÂ¸Ã’ÆÃ â¬"Ã’â¬aÃÂ¢Ã’ÆÃÂ¢Ã’Â¢Ã¢â¬aÂ¬Ã&Â¡Ã’â¬aÃÂ¬Ã’ÆÃ¢â¬Å¡Ã’â¬a
+ÃÂÃ’ÆÃ â¬"Ã’Â¢Ã¢â¬aÂ¬Ã&Â¡Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂ¥Ã’ÆÃ â¬"Ã’â¬ Ã¢â¬â¢Ã’ÆÃ¢â
+¬Å¡Ã’â¬aÃÂ°Ã’ÆÃ â¬"Ã’Â¢Ã¢â¬aÂ¬ÃÂ¦Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂ¸Ã’ÆÃ â¬"Ã’â¬aÃÂ¢Ã
+’ÆÃÂ¢Ã’Â¢Ã¢â¬aÂ¬Ã&Â¡Ã’â¬aÃÂ¬Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂÃ’ÆÃ â¬"Ã’Â¢Ã¢â¬aÂ¬Ã&Â¡Ã’
+ÆÃ¢â¬Å¡Ã’â¬aÃÂ¥Ã’ÆÃ â¬"Ã’â¬ Ã¢â¬â¢Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂ°Ã’ÆÃ â¬"Ã’Â¢Ã¢â
+¬aÂ¬ÃÂ¦Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂ¸Ã’ÆÃ â¬"Ã’â¬aÃÂ¢Ã’ÆÃÂ¢Ã’Â¢Ã¢â¬aÂ¬Ã&Â¡Ã’â¬aÃ
+Â¬Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂÃ’ÆÃ â¬"Ã’Â¢Ã¢â¬aÂ¬Ã&Â¡Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂ¥ PREDICTION
+ CLIENT ENTERED Ã’ÆÃ â¬"Ã’â¬ Ã¢â¬â¢Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂ°Ã’ÆÃ â¬"Ã’Â¢Ã¢â¬a
+Â¬ÃÂ¦Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂ¸Ã’ÆÃ â¬"Ã’â¬aÃÂ¢Ã’ÆÃÂ¢Ã’Â¢Ã¢â¬aÂ¬Ã&Â¡Ã’â¬aÃÂ¬
+Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂÃ’ÆÃ â¬"Ã’Â¢Ã¢â¬aÂ¬Ã&Â¡Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂ¥Ã’ÆÃ â¬"Ã’â¬
+ Ã¢â¬â¢Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂ°Ã’ÆÃ â¬"Ã’Â¢Ã¢â¬aÂ¬ÃÂ¦Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂ¸Ã’Æ
+Ã â¬"Ã’â¬aÃÂ¢Ã’ÆÃÂ¢Ã’Â¢Ã¢â¬aÂ¬Ã&Â¡Ã’â¬aÃÂ¬Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂÃ’ÆÃ â¬"Ã
+’Â¢Ã¢â¬aÂ¬Ã&Â¡Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂ¥Ã’ÆÃ â¬"Ã’â¬ Ã¢â¬â¢Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂ°
+Ã’ÆÃ â¬"Ã’Â¢Ã¢â¬aÂ¬ÃÂ¦Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂ¸Ã’ÆÃ â¬"Ã’â¬aÃÂ¢Ã’ÆÃÂ¢Ã’Â¢Ã¢
+â¬aÂ¬Ã&Â¡Ã’â¬aÃÂ¬Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂÃ’ÆÃ â¬"Ã’Â¢Ã¢â¬aÂ¬Ã&Â¡Ã’ÆÃ¢â¬Å¡Ã’â¬
+aÃÂ¥
+[PRED CLIENT] Ã’ÆÃ â¬"Ã’â¬ Ã¢â¬â¢Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂ¢Ã’ÆÃ â¬"Ã’â¬aÃÂ¢Ã’
+ÆÃÂ¢Ã’Â¢Ã¢â¬aÂ¬Ã&Â¡Ã’â¬aÃÂ¬ Ã’ÆÃ â¬"Ã’â¬aÃÂ¢Ã’ÆÃÂ¢Ã’Â¢Ã¢â¬aÂ¬Ã&Â¡Ã’â¬
+aÃÂ¬Ã’ÆÃÂ¢Ã’Â¢Ã¢â¬aÂ¬Ã&Â¾Ã’â¬aÃÂ¢ CALLED: tickers=['ONGC', 'TATASTEEL',
+'VEDL'], time_frame=3 hours, candle=5m
+[PRED CLIENT] Payload built: 3 tickers
+inside the run batch function being called from for loop
+Ã’ÆÃ â¬"Ã’â¬ Ã¢â¬â¢Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂ°Ã’ÆÃ â¬"Ã’Â¢Ã¢â¬aÂ¬ÃÂ¦Ã’ÆÃ¢â¬Å
+¡Ã’â¬aÃÂ¸Ã’ÆÃ â¬"Ã’â¬aÃÂ¢Ã’ÆÃÂ¢Ã’Â¢Ã¢â¬aÂ¬Ã&Â¡Ã’â¬aÃÂ¬Ã’ÆÃ¢â¬Å¡Ã’â¬a
+ÃÂÃ’ÆÃ â¬"Ã’Â¢Ã¢â¬aÂ¬Ã&Â¡Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂ¥Ã’ÆÃ â¬"Ã’â¬ Ã¢â¬â¢Ã’ÆÃ¢â
+¬Å¡Ã’â¬aÃÂ°Ã’ÆÃ â¬"Ã’Â¢Ã¢â¬aÂ¬ÃÂ¦Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂ¸Ã’ÆÃ â¬"Ã’â¬aÃÂ¢Ã
+’ÆÃÂ¢Ã’Â¢Ã¢â¬aÂ¬Ã&Â¡Ã’â¬aÃÂ¬Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂÃ’ÆÃ â¬"Ã’Â¢Ã¢â¬aÂ¬Ã&Â¡Ã’
+ÆÃ¢â¬Å¡Ã’â¬aÃÂ¥Ã’ÆÃ â¬"Ã’â¬ Ã¢â¬â¢Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂ°Ã’ÆÃ â¬"Ã’Â¢Ã¢â
+¬aÂ¬ÃÂ¦Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂ¸Ã’ÆÃ â¬"Ã’â¬aÃÂ¢Ã’ÆÃÂ¢Ã’Â¢Ã¢â¬aÂ¬Ã&Â¡Ã’â¬aÃ
+Â¬Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂÃ’ÆÃ â¬"Ã’Â¢Ã¢â¬aÂ¬Ã&Â¡Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂ¥ PREDICTION
+ CLIENT ENTERED Ã’ÆÃ â¬"Ã’â¬ Ã¢â¬â¢Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂ°Ã’ÆÃ â¬"Ã’Â¢Ã¢â¬a
+Â¬ÃÂ¦Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂ¸Ã’ÆÃ â¬"Ã’â¬aÃÂ¢Ã’ÆÃÂ¢Ã’Â¢Ã¢â¬aÂ¬Ã&Â¡Ã’â¬aÃÂ¬
+Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂÃ’ÆÃ â¬"Ã’Â¢Ã¢â¬aÂ¬Ã&Â¡Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂ¥Ã’ÆÃ â¬"Ã’â¬
+ Ã¢â¬â¢Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂ°Ã’ÆÃ â¬"Ã’Â¢Ã¢â¬aÂ¬ÃÂ¦Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂ¸Ã’Æ
+Ã â¬"Ã’â¬aÃÂ¢Ã’ÆÃÂ¢Ã’Â¢Ã¢â¬aÂ¬Ã&Â¡Ã’â¬aÃÂ¬Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂÃ’ÆÃ â¬"Ã
+’Â¢Ã¢â¬aÂ¬Ã&Â¡Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂ¥Ã’ÆÃ â¬"Ã’â¬ Ã¢â¬â¢Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂ°
+Ã’ÆÃ â¬"Ã’Â¢Ã¢â¬aÂ¬ÃÂ¦Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂ¸Ã’ÆÃ â¬"Ã’â¬aÃÂ¢Ã’ÆÃÂ¢Ã’Â¢Ã¢
+â¬aÂ¬Ã&Â¡Ã’â¬aÃÂ¬Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂÃ’ÆÃ â¬"Ã’Â¢Ã¢â¬aÂ¬Ã&Â¡Ã’ÆÃ¢â¬Å¡Ã’â¬
+aÃÂ¥
+[PRED CLIENT] Ã’ÆÃ â¬"Ã’â¬ Ã¢â¬â¢Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂ¢Ã’ÆÃ â¬"Ã’â¬aÃÂ¢Ã’
+ÆÃÂ¢Ã’Â¢Ã¢â¬aÂ¬Ã&Â¡Ã’â¬aÃÂ¬ Ã’ÆÃ â¬"Ã’â¬aÃÂ¢Ã’ÆÃÂ¢Ã’Â¢Ã¢â¬aÂ¬Ã&Â¡Ã’â¬
+aÃÂ¬Ã’ÆÃÂ¢Ã’Â¢Ã¢â¬aÂ¬Ã&Â¾Ã’â¬aÃÂ¢ CALLED: tickers=['BANKBARODA', 'HDFCBA
+NK', 'BAJAJFINSV'], time_frame=3 hours, candle=5m
+[PRED CLIENT] Payload built: 3 tickers
+[LTP-WS] ticks=200 symbols_seen=9/9 rate~9.6/s sources={'mid': 200, 'bid': 0
+, 'ask': 0, 'ltp': 0}
+[PRED CLIENT] Unexpected response for BANKBARODA: 'Prediction error: No colu
+mns to parse from file'
+[PRED CLIENT] Formatted 73 prediction rows
+[PRED CLIENT] Ã’ÆÃ â¬"Ã’â¬ Ã¢â¬â¢Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂ¢Ã’ÆÃ â¬"Ã’Â¢Ã¢â¬aÂ¬
+ÃÂ¦Ã’ÆÃÂ¢Ã’Â¢Ã¢â¬Å¡ÃÂ¬Ã’â¬¦Ã¢â¬ÅÃ’ÆÃ â¬"Ã’â¬aÃÂ¢Ã’ÆÃÂ¢Ã’Â¢Ã¢â¬aÂ¬
+Ã&Â¡Ã’â¬aÃÂ¬Ã’ÆÃ¢â¬Â¦Ã’Â¢Ã¢â¬aÂ¬Ã&â¬S Returning DataFrame 73 rows
+prediction call returned from function now check the response time
+[_run_batch] ['BANKBARODA', 'HDFCBANK', 'BAJAJFINSV']  completed in 16.91s
+[TIMING] BATCH_PREDICTION                               16.909s  symbols=['B
+ANKBARODA', 'HDFCBANK', 'BAJAJFINSV']
+[BATCH TIMER] ['BANKBARODA', 'HDFCBANK', 'BAJAJFINSV']  waiting for result..
+. (04:03:25)
+[BATCH TIMER] ['BANKBARODA', 'HDFCBANK', 'BAJAJFINSV']  got response in 0.00
+s (0.00 min)
+response coming from prediction service df with timeout 300         Ticker P
+arameter  ... risk_regime direction
+0     HDFCBANK     close  ...         1.0      DOWN
+1   BAJAJFINSV     close  ...         0.0        UP
+2     HDFCBANK     close  ...         1.0      DOWN
+3   BAJAJFINSV     close  ...         0.0        UP
+4     HDFCBANK     close  ...         1.0        UP
+..         ...       ...  ...         ...       ...
+68  BAJAJFINSV     close  ...         0.0        UP
+69    HDFCBANK     close  ...         2.0      DOWN
+70    HDFCBANK     close  ...         1.0      DOWN
+71  BAJAJFINSV     close  ...         2.0        UP
+72  BANKBARODA       N/A  ...         NaN       NaN
+
+[73 rows x 8 columns]
+response has error column from predicton service
+[2026-06-22 04:03:26] Prediction error for batch ['BANKBARODA', 'HDFCBANK',
+'BAJAJFINSV']
+[PRED CLIENT] Formatted 108 prediction rows
+[PRED CLIENT] Ã’ÆÃ â¬"Ã’â¬ Ã¢â¬â¢Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂ¢Ã’ÆÃ â¬"Ã’Â¢Ã¢â¬aÂ¬
+ÃÂ¦Ã’ÆÃÂ¢Ã’Â¢Ã¢â¬Å¡ÃÂ¬Ã’â¬¦Ã¢â¬ÅÃ’ÆÃ â¬"Ã’â¬aÃÂ¢Ã’ÆÃÂ¢Ã’Â¢Ã¢â¬aÂ¬
+Ã&Â¡Ã’â¬aÃÂ¬Ã’ÆÃ¢â¬Â¦Ã’Â¢Ã¢â¬aÂ¬Ã&â¬S Returning DataFrame 108 rows
+prediction call returned from function now check the response time
+[_run_batch] ['ONGC', 'TATASTEEL', 'VEDL']  completed in 28.62s
+[TIMING] BATCH_PREDICTION                               28.619s  symbols=['O
+NGC', 'TATASTEEL', 'VEDL']
+[BATCH TIMER] ['ONGC', 'TATASTEEL', 'VEDL']  waiting for result... (04:03:37
+)
+[BATCH TIMER] ['ONGC', 'TATASTEEL', 'VEDL']  got response in 0.00s (0.00 min
+)
+response coming from prediction service df with timeout 300         Ticker P
+arameter  ... risk_regime  direction
+0         ONGC     close  ...           0         UP
+1         VEDL     close  ...           2         UP
+2    TATASTEEL     close  ...           1       DOWN
+3         ONGC     close  ...           1       DOWN
+4         VEDL     close  ...           2         UP
+..         ...       ...  ...         ...        ...
+103       ONGC     close  ...           2       DOWN
+104  TATASTEEL     close  ...           2       DOWN
+105  TATASTEEL     close  ...           1         UP
+106       ONGC     close  ...           1       DOWN
+107       VEDL     close  ...           2       DOWN
+
+[108 rows x 7 columns]
+df response coming from the predicton service          Ticker Parameter  ...
+ risk_regime  direction
+0         ONGC     close  ...           0         UP
+1         VEDL     close  ...           2         UP
+2    TATASTEEL     close  ...           1       DOWN
+3         ONGC     close  ...           1       DOWN
+4         VEDL     close  ...           2         UP
+..         ...       ...  ...         ...        ...
+103       ONGC     close  ...           2       DOWN
+104  TATASTEEL     close  ...           2       DOWN
+105  TATASTEEL     close  ...           1         UP
+106       ONGC     close  ...           1       DOWN
+107       VEDL     close  ...           2       DOWN
+
+[108 rows x 7 columns]
+merged df list is :  [        Ticker Parameter  ... risk_regime  direction
+0         ONGC     close  ...           0         UP
+1         VEDL     close  ...           2         UP
+2    TATASTEEL     close  ...           1       DOWN
+3         ONGC     close  ...           1       DOWN
+4         VEDL     close  ...           2         UP
+..         ...       ...  ...         ...        ...
+103       ONGC     close  ...           2       DOWN
+104  TATASTEEL     close  ...           2       DOWN
+105  TATASTEEL     close  ...           1         UP
+106       ONGC     close  ...           1       DOWN
+107       VEDL     close  ...           2       DOWN
+
+[108 rows x 7 columns]]
+[PRED CLIENT] Formatted 108 prediction rows
+[PRED CLIENT] Ã’ÆÃ â¬"Ã’â¬ Ã¢â¬â¢Ã’ÆÃ¢â¬Å¡Ã’â¬aÃÂ¢Ã’ÆÃ â¬"Ã’Â¢Ã¢â¬aÂ¬
+ÃÂ¦Ã’ÆÃÂ¢Ã’Â¢Ã¢â¬Å¡ÃÂ¬Ã’â¬¦Ã¢â¬ÅÃ’ÆÃ â¬"Ã’â¬aÃÂ¢Ã’ÆÃÂ¢Ã’Â¢Ã¢â¬aÂ¬
+Ã&Â¡Ã’â¬aÃÂ¬Ã’ÆÃ¢â¬Â¦Ã’Â¢Ã¢â¬aÂ¬Ã&â¬S Returning DataFrame 108 rows
+prediction call returned from function now check the response time
+[_run_batch] ['ITC', 'GAIL', 'NTPC']  completed in 34.19s
+[TIMING] BATCH_PREDICTION                               34.194s  symbols=['I
+TC', 'GAIL', 'NTPC']
+[BATCH TIMER] ['ITC', 'GAIL', 'NTPC']  waiting for result... (04:03:43)
+[BATCH TIMER] ['ITC', 'GAIL', 'NTPC']  got response in 0.00s (0.00 min)
+response coming from prediction service df with timeout 300     Ticker Param
+eter  ... risk_regime  direction
+0      ITC     close  ...           0       DOWN
+1     NTPC     close  ...           2       DOWN
+2     GAIL     close  ...           1       DOWN
+3      ITC     close  ...           2         UP
+4     NTPC     close  ...           0       DOWN
+..     ...       ...  ...         ...        ...
+103    ITC     close  ...           2         UP
+104   GAIL     close  ...           1         UP
+105   GAIL     close  ...           1       DOWN
+106    ITC     close  ...           2         UP
+107   NTPC     close  ...           0       DOWN
+
+[108 rows x 7 columns]
+df response coming from the predicton service      Ticker Parameter  ... ris
+k_regime  direction
+0      ITC     close  ...           0       DOWN
+1     NTPC     close  ...           2       DOWN
+2     GAIL     close  ...           1       DOWN
+3      ITC     close  ...           2         UP
+4     NTPC     close  ...           0       DOWN
+..     ...       ...  ...         ...        ...
+103    ITC     close  ...           2         UP
+104   GAIL     close  ...           1         UP
+105   GAIL     close  ...           1       DOWN
+106    ITC     close  ...           2         UP
+107   NTPC     close  ...           0       DOWN
+
+[108 rows x 7 columns]
+merged df list is :  [        Ticker Parameter  ... risk_regime  direction
+0         ONGC     close  ...           0         UP
+1         VEDL     close  ...           2         UP
+2    TATASTEEL     close  ...           1       DOWN
+3         ONGC     close  ...           1       DOWN
+4         VEDL     close  ...           2         UP
+..         ...       ...  ...         ...        ...
+103       ONGC     close  ...           2       DOWN
+104  TATASTEEL     close  ...           2       DOWN
+105  TATASTEEL     close  ...           1         UP
+106       ONGC     close  ...           1       DOWN
+107       VEDL     close  ...           2       DOWN
+
+[108 rows x 7 columns],     Ticker Parameter  ... risk_regime  direction
+0      ITC     close  ...           0       DOWN
+1     NTPC     close  ...           2       DOWN
+2     GAIL     close  ...           1       DOWN
+3      ITC     close  ...           2         UP
+4     NTPC     close  ...           0       DOWN
+..     ...       ...  ...         ...        ...
+103    ITC     close  ...           2         UP
+104   GAIL     close  ...           1         UP
+105   GAIL     close  ...           1       DOWN
+106    ITC     close  ...           2         UP
+107   NTPC     close  ...           0       DOWN
+
+[108 rows x 7 columns]]
+[TREND REDIS] ITC | latency=0.0012s | status=MISS
+[TIMING] TREND_REDIS_GET                                 0.001s  ITC|MISS
+[TREND REDIS] GAIL | latency=0.0011s | status=MISS
+[TIMING] TREND_REDIS_GET                                 0.001s  GAIL|MISS
+[TREND REDIS] NTPC | latency=0.0010s | status=MISS
+[TIMING] TREND_REDIS_GET                                 0.001s  NTPC|MISS
+[TREND REDIS] ONGC | latency=0.0009s | status=MISS
+[TIMING] TREND_REDIS_GET                                 0.001s  ONGC|MISS
+[TREND REDIS] TATASTEEL | latency=0.0008s | status=MISS
+[TIMING] TREND_REDIS_GET                                 0.001s  TATASTEEL|M
+ISS
+[TREND REDIS] VEDL | latency=0.0009s | status=MISS
+[TIMING] TREND_REDIS_GET                                 0.001s  VEDL|MISS
+[TREND REDIS] BANKBARODA | latency=0.0008s | status=MISS
+[TIMING] TREND_REDIS_GET                                 0.001s  BANKBARODA|
+MISS
+[TREND REDIS] HDFCBANK | latency=0.0010s | status=MISS
+[TIMING] TREND_REDIS_GET                                 0.001s  HDFCBANK|MI
+SS
+[TREND REDIS] BAJAJFINSV | latency=0.0010s | status=MISS
+[TIMING] TREND_REDIS_GET                                 0.001s  BAJAJFINSV|
+MISS
+[TREND TOTAL] BAJAJFINSV | total_time=1782101023.3172s
+[TIMING] TREND_TOTAL                                     0.011s  BAJAJFINSV
+
+[AUTH DEBUG] Evaluating auth error
+[AUTH DEBUG] status=True
+[AUTH DEBUG] message='success'
+[AUTH DEBUG] errorcode=''
+[AUTH DEBUG] Ã’ÆÃÂ¢Ã’Â¢Ã¢â¬aÂ¬ Ã’Â¢Ã¢â¬aÂ¬Ã¢â¬~Â¢ NOT an auth error
+[TIMING] BROKER_POS_FETCH                                0.790s  positions=0
+[CACHE] 0 open positions refreshed for cycle
+[LTP FUNC] symbol=GAIL candle=15m redis=YES fetch_price=YES
+
+[DEBUG-VERIFY] BOTH KEYS FETCH TEST:
+  --> Key 'price:live:GAIL.NS'  = None
+calling market_client.fetch_price inside the get_live_price_redis GAIL.NS 20
+26-06-22 09:30:00+05:30 15m
+[TIMING] LTP_PER_SYMBOL GAIL              0.383s  source=BROKER_FETCH
+[TIMING] fetch_Price_total_time                          0.384s  fetch_price
+_total_time=0.3834950923919678
+px is present {'Open': 174.15, 'High': 175.18, 'Low': 174.15, 'Close': 175.0
+1}
+[TIMING] LTP_PER_SYMBOL GAIL              0.387s  source=BROKER_FETCH
+[LIVE RESULT] GAIL live_price=175.01 (USING LIVE)
+[CURR PRICE FINAL] GAIL curr_price=175.01
+[LTP FUNC] symbol=ITC candle=15m redis=YES fetch_price=YES
+
+[DEBUG-VERIFY] BOTH KEYS FETCH TEST:
+  --> Key 'price:live:ITC.NS'  = None
+calling market_client.fetch_price inside the get_live_price_redis ITC.NS 202
+6-06-22 09:30:00+05:30 15m
+[TIMING] LTP_PER_SYMBOL ITC               0.056s  source=BROKER_FETCH
+[TIMING] fetch_Price_total_time                          0.056s  fetch_price
+_total_time=0.056014299392700195
+px is present {'Open': 292.8, 'High': 293.95, 'Low': 292.5, 'Close': 292.8}
+[TIMING] LTP_PER_SYMBOL ITC               0.059s  source=BROKER_FETCH
+[LIVE RESULT] ITC live_price=292.8 (USING LIVE)
+[CURR PRICE FINAL] ITC curr_price=292.8
+[LTP FUNC] symbol=NTPC candle=15m redis=YES fetch_price=YES
+
+[DEBUG-VERIFY] BOTH KEYS FETCH TEST:
+  --> Key 'price:live:NTPC.NS'  = {"price": 365.0, "ts": "2026-06-22T09:33:3
+3.473751+05:30", "source": "closed_candle"}
+[TIMING] LTP_PER_SYMBOL NTPC              0.001s  source=REDIS_JSON
+[LIVE RESULT] NTPC live_price=365.0 (USING LIVE)
+[CURR PRICE FINAL] NTPC curr_price=365.0
+[LTP FUNC] symbol=ONGC candle=15m redis=YES fetch_price=YES
+
+[DEBUG-VERIFY] BOTH KEYS FETCH TEST:
+  --> Key 'price:live:ONGC.NS'  = None
+calling market_client.fetch_price inside the get_live_price_redis ONGC.NS 20
+26-06-22 09:30:00+05:30 15m
+[TIMING] LTP_PER_SYMBOL ONGC              0.876s  source=BROKER_FETCH
+[TIMING] fetch_Price_total_time                          0.876s  fetch_price
+_total_time=0.8757288455963135
+px is present {'Open': 244.95, 'High': 245.9, 'Low': 243.8, 'Close': 245.35}
+[TIMING] LTP_PER_SYMBOL ONGC              0.879s  source=BROKER_FETCH
+[LIVE RESULT] ONGC live_price=245.35 (USING LIVE)
+[CURR PRICE FINAL] ONGC curr_price=245.35
+[LTP FUNC] symbol=TATASTEEL candle=15m redis=YES fetch_price=YES
+
+[DEBUG-VERIFY] BOTH KEYS FETCH TEST:
+  --> Key 'price:live:TATASTEEL.NS'  = None
+calling market_client.fetch_price inside the get_live_price_redis TATASTEEL.
+NS 2026-06-22 09:30:00+05:30 15m
+[TIMING] LTP_PER_SYMBOL TATASTEEL         0.268s  source=BROKER_FETCH
+[TIMING] fetch_Price_total_time                          0.268s  fetch_price
+_total_time=0.26818108558654785
+px is present {'Open': 199.3, 'High': 199.95, 'Low': 199.1, 'Close': 199.59}
+[TIMING] LTP_PER_SYMBOL TATASTEEL         0.271s  source=BROKER_FETCH
+[LIVE RESULT] TATASTEEL live_price=199.59 (USING LIVE)
+[CURR PRICE FINAL] TATASTEEL curr_price=199.59
+[LTP FUNC] symbol=VEDL candle=15m redis=YES fetch_price=YES
+
+[DEBUG-VERIFY] BOTH KEYS FETCH TEST:
+  --> Key 'price:live:VEDL.NS'  = {"price": 303.85, "ts": "2026-06-22T09:33:
+23.900362+05:30", "source": "closed_candle"}
+[TIMING] LTP_PER_SYMBOL VEDL              0.001s  source=REDIS_JSON
+[LIVE RESULT] VEDL live_price=303.85 (USING LIVE)
+[CURR PRICE FINAL] VEDL curr_price=303.85
+[TIMING] ANALYZE_SIGNALS                                 1.611s  symbols=6
+
+CYCLE #1 - 2026-06-22 09:33:45
+Cash Balance: 110,000.00
+============================================================================
+============================================
+Symbol       Curr_Price  Trajectory%    Side Signal
+     Action Taken
+----------------------------------------------------------------------------
+--------------------------------------------
+starting the for loop having 400 lines of code in between
+[DEBUG TOP] sym=GAIL has_broker_pos=False
+[DEBUG TOP] sym=GAIL has_broker_pos=False
+[DEBUG TOP] symbol_action_taken : False
+[DEBUG] risk_veto=False sig=SELL
+[DEBUG] before OPEN LONG: symbol_action_taken=False
+[TRACE] SYMBOL_LOCK GAIL: 0.000004s
+[TIMING] symbol lock timing                              0.000s  GAIL
+[TRACE] CAN_RESERVE GAIL: 0.000008s
+[TIMING] CAN_RESERVE_EXPOSURE                            0.000s  GAIL
+[TRACE] RESERVE_EXPOSURE GAIL: 0.000002s
+[TIMING] RESERVE_EXPOSURE                                0.000s  GAIL
+[ORDER QUEUED] GAIL SELL qty=2
+[TRACE] ADD_ORDER GAIL: 0.000003s
+[DEBUG TOP] sym=ITC has_broker_pos=False
+[DEBUG TOP] sym=ITC has_broker_pos=False
+[DEBUG TOP] sym=NTPC has_broker_pos=False
+[DEBUG TOP] sym=NTPC has_broker_pos=False
+[DEBUG TOP] symbol_action_taken : False
+[DEBUG] risk_veto=False sig=SELL
+[DEBUG] before OPEN LONG: symbol_action_taken=False
+[TRACE] SYMBOL_LOCK NTPC: 0.000002s
+[TIMING] symbol lock timing                              0.000s  NTPC
+[TRACE] CAN_RESERVE NTPC: 0.000005s
+[TIMING] CAN_RESERVE_EXPOSURE                            0.000s  NTPC
+[TRACE] RESERVE_EXPOSURE NTPC: 0.000001s
+[TIMING] RESERVE_EXPOSURE                                0.000s  NTPC
+[ORDER QUEUED] NTPC SELL qty=1
+[TRACE] ADD_ORDER NTPC: 0.000002s
+[DEBUG TOP] sym=ONGC has_broker_pos=False
+[DEBUG TOP] sym=ONGC has_broker_pos=False
+[DEBUG TOP] sym=TATASTEEL has_broker_pos=False
+[DEBUG TOP] sym=TATASTEEL has_broker_pos=False
+[DEBUG TOP] symbol_action_taken : False
+[DEBUG] risk_veto=False sig=SELL
+[DEBUG] before OPEN LONG: symbol_action_taken=False
+[TRACE] SYMBOL_LOCK TATASTEEL: 0.000001s
+[TIMING] symbol lock timing                              0.000s  TATASTEEL
+[TRACE] CAN_RESERVE TATASTEEL: 0.000002s
+[TIMING] CAN_RESERVE_EXPOSURE                            0.000s  TATASTEEL
+[TRACE] RESERVE_EXPOSURE TATASTEEL: 0.000001s
+[TIMING] RESERVE_EXPOSURE                                0.000s  TATASTEEL
+[ORDER QUEUED] TATASTEEL SELL qty=2
+[TRACE] ADD_ORDER TATASTEEL: 0.000001s
+[DEBUG TOP] sym=VEDL has_broker_pos=False
+[DEBUG TOP] sym=VEDL has_broker_pos=False
+[DEBUG TOP] symbol_action_taken : False
+[DEBUG] risk_veto=False sig=BUY
+[DEBUG] before OPEN LONG: symbol_action_taken=False
+[TRACE] SYMBOL_LOCK VEDL: 0.000001s
+[TIMING] symbol lock timing                              0.000s  VEDL
+[TRACE] CAN_RESERVE VEDL: 0.000002s
+[TIMING] CAN_RESERVE_EXPOSURE                            0.000s  VEDL
+[TRACE] RESERVE_EXPOSURE VEDL: 0.000000s
+[TIMING] RESERVE_EXPOSURE                                0.000s  VEDL
+[ORDER QUEUED] VEDL BUY qty=1
+[TRACE] ADD_ORDER VEDL: 0.000001s
+
+[PARALLEL] Executing 4 orders concurrently...
+[INFO] Parallel order executor initialized with 4 workers
+[INFO]  Rate limits: 8 orders/sec, 18 status checks/sec
+
+[DEBUG-ORDER] [04:03:45.732] Submitting SELL order for symbol=GAIL qty=2 typ
+e=MARKET product=INTRADAY price=None sl=None trigger=None
+[ORDER] Placing SELL order: GAIL x 2 @ 0 | SL: 0 | Type: MARKET
+
+[DEBUG-ORDER] [04:03:45.733] Submitting SELL order for symbol=NTPC qty=1 typ
+e=MARKET product=INTRADAY price=None sl=None trigger=None
+[ORDER] Placing SELL order: NTPC x 1 @ 0 | SL: 0 | Type: MARKET
+
+[DEBUG-ORDER] [04:03:45.734] Submitting SELL order for symbol=TATASTEEL qty=
+2 type=MARKET product=INTRADAY price=None sl=None trigger=None
+[ORDER] Placing SELL order: TATASTEEL x 2 @ 0 | SL: 0 | Type: MARKET
+
+[DEBUG-ORDER] [04:03:45.735] Submitting BUY order for symbol=VEDL qty=1 type
+=MARKET product=INTRADAY price=None sl=None trigger=None
+[ORDER] Placing BUY order: VEDL x 1 @ 0 | SL: 0 | Type: MARKET
+
+[EXECUTOR] place_order raw response:
+{'status': 'success', 'order_id': '260622000100119', 'filled': None, 'raw':
+'260622000100119'}
+[DEBUG-ORDER] [04:03:46.530] Received order_id 260622000100119 for GAIL
+
+[EXECUTOR] place_order raw response:
+{'status': 'success', 'order_id': '260622000100120', 'filled': None, 'raw':
+'260622000100120'}
+[DEBUG-ORDER] [04:03:46.533] Received order_id 260622000100120 for TATASTEEL
+
+[EXECUTOR] place_order raw response:
+{'status': 'success', 'order_id': '260622000100123', 'filled': None, 'raw':
+'260622000100123'}
+[DEBUG-ORDER] [04:03:46.542] Received order_id 260622000100123 for NTPC
+
+[EXECUTOR] place_order raw response:
+{'status': 'success', 'order_id': '260622000100129', 'filled': None, 'raw':
+'260622000100129'}
+[DEBUG-ORDER] [04:03:46.594] Received order_id 260622000100129 for VEDL
+[TIMING] PARALLEL_ORDER_EXEC                             0.864s  orders=4
+before the thrreadpool executer of fetchltp
+inside the thrreadpool executer of fetchltp now fetch ltp will be called
+[LTP FUNC] symbol=GAIL candle=15m redis=YES fetch_price=YES
+[LTP FUNC] symbol=NTPC candle=15m redis=YES fetch_price=YES
+[LTP FUNC] symbol=TATASTEEL candle=15m redis=YES fetch_price=YES
+[LTP FUNC] symbol=VEDL candle=15m redis=YES fetch_price=YES
+
+[DEBUG-VERIFY] BOTH KEYS FETCH TEST:
+  --> Key 'price:live:GAIL.NS'  = 175.01
+[LTP] inside _fetch_ltp_safe GAIL: 175.01
+
+[DEBUG-VERIFY] BOTH KEYS FETCH TEST:
+  --> Key 'price:live:VEDL.NS'  = {"price": 303.85, "ts": "2026-06-22T09:33:
+23.900362+05:30", "source": "closed_candle"}
+[TIMING] LTP_PER_SYMBOL VEDL              0.029s  source=REDIS_JSON
+[LTP] inside _fetch_ltp_safe VEDL: 303.85
+
+[DEBUG-VERIFY] BOTH KEYS FETCH TEST:
+  --> Key 'price:live:NTPC.NS'  = {"price": 365.0, "ts": "2026-06-22T09:33:3
+3.473751+05:30", "source": "closed_candle"}
+[TIMING] LTP_PER_SYMBOL NTPC              0.034s  source=REDIS_JSON
+[LTP] inside _fetch_ltp_safe NTPC: 365.0
+
+[DEBUG-VERIFY] BOTH KEYS FETCH TEST:
+  --> Key 'price:live:TATASTEEL.NS'  = 199.59
+[LTP] inside _fetch_ltp_safe TATASTEEL: 199.59
+time taken in fetchltp_price 0.03655600547790527
+[TIMING] FETCH_LTP                                       0.000s  symbols=4
+[TRACE] RESULT_LTP from get_live_price_redis GAIL: 0.000s
+[TIMING] RESULT_LTP_FETCH                                0.000s  GAIL
+[TRACE] LOG_TRADE GAIL: 0.000s
+[TIMING] LOG_TRADE_TIME                                  0.000s  GAIL
+  GAIL: OPEN_SHORT PENDING (order sent) @ 175.01
+[TRACE] RESULT_TOTAL GAIL: 0.000s
+[TIMING] RESULT_PROCESS_TOTAL                            0.000s  GAIL
+[TRACE] RESULT_LTP from get_live_price_redis TATASTEEL: 0.000s
+[TIMING] RESULT_LTP_FETCH                                0.000s  TATASTEEL
+[TRACE] LOG_TRADE TATASTEEL: 0.000s
+[TIMING] LOG_TRADE_TIME                                  0.000s  TATASTEEL
+  TATASTEEL: OPEN_SHORT PENDING (order sent) @ 199.59
+[TRACE] RESULT_TOTAL TATASTEEL: 0.000s
+[TIMING] RESULT_PROCESS_TOTAL                            0.000s  TATASTEEL
+[TRACE] RESULT_LTP from get_live_price_redis NTPC: 0.000s
+[TIMING] RESULT_LTP_FETCH                                0.000s  NTPC
+[TRACE] LOG_TRADE NTPC: 0.000s
+[TIMING] LOG_TRADE_TIME                                  0.000s  NTPC
+  NTPC: OPEN_SHORT PENDING (order sent) @ 365.00
+[TRACE] RESULT_TOTAL NTPC: 0.000s
+[TIMING] RESULT_PROCESS_TOTAL                            0.000s  NTPC
+[TRACE] RESULT_LTP from get_live_price_redis VEDL: 0.000s
+[TIMING] RESULT_LTP_FETCH                                0.000s  VEDL
+[TRACE] LOG_TRADE VEDL: 0.000s
+[TIMING] LOG_TRADE_TIME                                  0.000s  VEDL
+  VEDL: OPEN_LONG PENDING (order sent) @ 303.85
+[TRACE] RESULT_TOTAL VEDL: 0.000s
+[TIMING] RESULT_PROCESS_TOTAL                            0.000s  VEDL
+[TRACE] PNL GAIL: 0.0000s
+[TIMING] PNL_CALC                                        0.000s  GAIL
+[TRACE] HOLD_LOOP GAIL: 0.000s
+[TIMING] HOLD_LOOP_PER_SYMBOL                            0.000s  GAIL
+GAIL             175.01    -0.138100   NONE SELL
+    PENDING (order sent)
+[TRACE] PNL ITC: 0.0000s
+[TIMING] PNL_CALC                                        0.000s  ITC
+[TRACE] HOLD_LOOP ITC: 0.000s
+[TIMING] HOLD_LOOP_PER_SYMBOL                            0.000s  ITC
+ITC              292.80    -0.038700   NONE SELL
+    WAIT (no position)
+[TRACE] PNL NTPC: 0.0000s
+[TIMING] PNL_CALC                                        0.000s  NTPC
+[TRACE] HOLD_LOOP NTPC: 0.000s
+[TIMING] HOLD_LOOP_PER_SYMBOL                            0.000s  NTPC
+NTPC             365.00    -0.263700   NONE SELL
+    PENDING (order sent)
+[TRACE] PNL ONGC: 0.0000s
+[TIMING] PNL_CALC                                        0.000s  ONGC
+[TRACE] HOLD_LOOP ONGC: 0.000s
+[TIMING] HOLD_LOOP_PER_SYMBOL                            0.000s  ONGC
+ONGC             245.35     0.027300   NONE BUY
+    WAIT (no position)
+[TRACE] PNL TATASTEEL: 0.0000s
+[TIMING] PNL_CALC                                        0.000s  TATASTEEL
+[TRACE] HOLD_LOOP TATASTEEL: 0.000s
+[TIMING] HOLD_LOOP_PER_SYMBOL                            0.000s  TATASTEEL
+TATASTEEL        199.59    -0.068500   NONE SELL
+    PENDING (order sent)
+[TRACE] PNL VEDL: 0.0000s
+[TIMING] PNL_CALC                                        0.000s  VEDL
+[TRACE] HOLD_LOOP VEDL: 0.000s
+[TIMING] HOLD_LOOP_PER_SYMBOL                            0.000s  VEDL
+VEDL             303.85     0.428400   NONE BUY
+    PENDING (order sent)
+[TRACE] PNL_LOOP GAIL: 0.0000s
+[TIMING] PNL_PER_SYMBOL                                  0.000s  GAIL
+[TRACE] PNL_LOOP ITC: 0.0000s
+[TIMING] PNL_PER_SYMBOL                                  0.000s  ITC
+[TRACE] PNL_LOOP NTPC: 0.0000s
+[TIMING] PNL_PER_SYMBOL                                  0.000s  NTPC
+[TRACE] PNL_LOOP ONGC: 0.0000s
+[TIMING] PNL_PER_SYMBOL                                  0.000s  ONGC
+[TRACE] PNL_LOOP TATASTEEL: 0.0000s
+[TIMING] PNL_PER_SYMBOL                                  0.000s  TATASTEEL
+[TRACE] PNL_LOOP VEDL: 0.0000s
+[TIMING] PNL_PER_SYMBOL                                  0.000s  VEDL
+[TRACE] PNL_LOOP_TOTAL: 0.000s
+[TIMING] PNL_LOOP_TOTAL                                  0.000s
+[TRACE] UI_SNAPSHOT: 1.153s
+[TIMING] UI_SNAPSHOT_TOTAL                               1.154s
+Realized PnL: 0.00
+Unrealized PnL: 0.00
+Total Equity: 110000.00
+[TIMING] CYCLE_TOTAL                                    38.711s  cycle=1
+time after analyse after second broker api call :  2.0583245754241943
+[TIMING] time after analyse after second broker api call   2.058s  time anal
+ysis of delay
+[SCHEDULER] now=09:33:47 next=09:46:00 sleep=732.2s
+
+[AUTH DEBUG] Evaluating auth error
+[AUTH DEBUG] status=True
+[AUTH DEBUG] message='success'
+[AUTH DEBUG] errorcode=''
+[AUTH DEBUG] Ã’ÆÃÂ¢Ã’Â¢Ã¢â¬aÂ¬ Ã’Â¢Ã¢â¬aÂ¬Ã¢â¬~Â¢ NOT an auth error
+[FILL PRICE] GAIL: order 260622000100119 | price=174.44 | averageprice=175.2
+4
+[FILL PRICE] GAIL: averageprice=Ã’â¬aÃÂ¹175.24 (2 shares)
+[RECONCILE] GAIL: avg_price order book se mili Ã’â¬aÃÂ¹175.24
+[POSITION SET] GAIL: SELL 2 @ Ã’â¬aÃÂ¹175.24
+[FILL PRICE] TATASTEEL: order 260622000100120 | price=197.99 | averageprice=
+198.92
+[FILL PRICE] TATASTEEL: averageprice=Ã’â¬aÃÂ¹198.92 (2 shares)
+[RECONCILE] TATASTEEL: avg_price order book se mili Ã’â¬aÃÂ¹198.92
+[POSITION SET] TATASTEEL: SELL 2 @ Ã’â¬aÃÂ¹198.92
+[FILL PRICE] NTPC: order 260622000100123 | price=363.50 | averageprice=365.2
+0
+[FILL PRICE] NTPC: averageprice=Ã’â¬aÃÂ¹365.20 (1 shares)
+[RECONCILE] NTPC: avg_price order book se mili Ã’â¬aÃÂ¹365.20
+[POSITION SET] NTPC: SELL 1 @ Ã’â¬aÃÂ¹365.20
+[FILL PRICE ERROR] VEDL: Couldn't parse the JSON response received from the
+server: b'Access denied because of exceeding access rate'
+[RECONCILE] VEDL: avg_price abhi bhi 0  next cycle mein retry hoga
+[FILL PRICE] VEDL: order 260622000100129 | price=305.25 | averageprice=303.7
+5
+[FILL PRICE] VEDL: averageprice=Ã’â¬aÃÂ¹303.75 (1 shares)
+[ENTRY PRICE] VEDL: order book se mili Ã’â¬aÃÂ¹303.75
+[POSITION SET] VEDL: BUY 1 @ Ã’â¬aÃÂ¹303.75
+[LTP-WS] ticks=400 symbols_seen=9/9 rate~7.2/s sources={'mid': 400, 'bid': 0
+, 'ask': 0, 'ltp': 0}
+[TRADER-TICK] first tick-with-position for NTPC: side=SELL qty=1 entry=365.2
+0 ltp=365.23 pnl=-0.03
+[RMS-TICKER] NTPC total=-0.03 (realized=0.00 + unrealized=-0.03) threshold=-
+3.65 usage=0.7% qty=1 side=SELL ltp=365.23
+[TRADER-TICK] first tick-with-position for GAIL: side=SELL qty=2 entry=175.2
+4 ltp=175.27 pnl=-0.06
+[RMS-TICKER] GAIL total=-0.06 (realized=0.00 + unrealized=-0.06) threshold=-
+3.50 usage=1.7% qty=2 side=SELL ltp=175.27
+[TRADER-TICK] first tick-with-position for VEDL: side=BUY qty=1 entry=303.75
+ ltp=303.70 pnl=-0.05
+[RMS-TICKER] VEDL total=-0.05 (realized=0.00 + unrealized=-0.05) threshold=-
+3.04 usage=1.6% qty=1 side=BUY ltp=303.70
+[TIMING] RECONCILE_CYCLE_TOTAL                6.657s  pending_syms=4
+[TIMING] RECONCILE_CYCLE_TOTAL                           6.658s  pending_sym
+s=4
+[TRADER-TICK] first tick-with-position for TATASTEEL: side=SELL qty=2 entry=
+198.92 ltp=198.96 pnl=-0.07
+[RMS-TICKER] TATASTEEL total=-0.07 (realized=0.00 + unrealized=-0.07) thresh
+old=-3.98 usage=1.8% qty=2 side=SELL ltp=198.96
+[LTP-WS] ticks=600 symbols_seen=9/9 rate~7.5/s sources={'mid': 600, 'bid': 0
+, 'ask': 0, 'ltp': 0}
+[RMS-TICKER] NTPC total=-0.07 (realized=0.00 + unrealized=-0.07) threshold=-
+3.65 usage=2.1% qty=1 side=SELL ltp=365.27
+[RMS-TICKER] VEDL total=0.20 (realized=0.00 + unrealized=0.20) threshold=-3.
+04 usage=-6.6% qty=1 side=BUY ltp=303.95
+[RMS-TICKER] GAIL total=-0.05 (realized=0.00 + unrealized=-0.05) threshold=-
+3.50 usage=1.4% qty=2 side=SELL ltp=175.26
+[RMS-TICKER] TATASTEEL total=-0.33 (realized=0.00 + unrealized=-0.33) thresh
+old=-3.98 usage=8.3% qty=2 side=SELL ltp=199.09
+[LTP-WS] ticks=800 symbols_seen=9/9 rate~8.3/s sources={'mid': 800, 'bid': 0
+, 'ask': 0, 'ltp': 0}
+[RMS-TICKER] GAIL total=-0.04 (realized=0.00 + unrealized=-0.04) threshold=-
+3.50 usage=1.1% qty=2 side=SELL ltp=175.26
+[RMS-TICKER] VEDL total=0.43 (realized=0.00 + unrealized=0.43) threshold=-3.
+04 usage=-14.0% qty=1 side=BUY ltp=304.18
+[RMS-TICKER] TATASTEEL total=-0.40 (realized=0.00 + unrealized=-0.40) thresh
+old=-3.98 usage=10.1% qty=2 side=SELL ltp=199.12
+[RMS-TICKER] NTPC total=-0.25 (realized=0.00 + unrealized=-0.25) threshold=-
+3.65 usage=6.8% qty=1 side=SELL ltp=365.45
+[LTP-WS] ticks=1000 symbols_seen=9/9 rate~5.5/s sources={'mid': 1000, 'bid':
+ 0, 'ask': 0, 'ltp': 0}
+[RMS-TICKER] TATASTEEL total=-0.72 (realized=0.00 + unrealized=-0.72) thresh
+old=-3.98 usage=18.1% qty=2 side=SELL ltp=199.28
+[RMS-TICKER] VEDL total=1.23 (realized=0.00 + unrealized=1.23) threshold=-3.
+04 usage=-40.3% qty=1 side=BUY ltp=304.98
+[RMS-TICKER] GAIL total=-0.04 (realized=0.00 + unrealized=-0.04) threshold=-
+3.50 usage=1.1% qty=2 side=SELL ltp=175.26
+[RMS-TICKER] NTPC total=-0.38 (realized=0.00 + unrealized=-0.38) threshold=-
+3.65 usage=10.3% qty=1 side=SELL ltp=365.57
+[LTP-WS] ticks=1200 symbols_seen=9/9 rate~7.8/s sources={'mid': 1200, 'bid':
+ 0, 'ask': 0, 'ltp': 0}
+[RMS-TICKER] NTPC total=-0.62 (realized=0.00 + unrealized=-0.62) threshold=-
+3.65 usage=17.1% qty=1 side=SELL ltp=365.82
+[RMS-TICKER] GAIL total=-0.06 (realized=0.00 + unrealized=-0.06) threshold=-
+3.50 usage=1.7% qty=2 side=SELL ltp=175.27
+[RMS-TICKER] VEDL total=1.25 (realized=0.00 + unrealized=1.25) threshold=-3.
+04 usage=-41.2% qty=1 side=BUY ltp=305.00
+[RMS-TICKER] TATASTEEL total=-0.60 (realized=0.00 + unrealized=-0.60) thresh
+old=-3.98 usage=15.1% qty=2 side=SELL ltp=199.22
+[LTP-WS] ticks=1400 symbols_seen=9/9 rate~5.6/s sources={'mid': 1400, 'bid':
+ 0, 'ask': 0, 'ltp': 0}
+[RMS-TICKER] NTPC total=-0.55 (realized=0.00 + unrealized=-0.55) threshold=-
+3.65 usage=15.1% qty=1 side=SELL ltp=365.75
+[RMS-TICKER] GAIL total=-0.33 (realized=0.00 + unrealized=-0.33) threshold=-
+3.50 usage=9.4% qty=2 side=SELL ltp=175.41
+[RMS-TICKER] VEDL total=1.18 (realized=0.00 + unrealized=1.18) threshold=-3.
+04 usage=-38.7% qty=1 side=BUY ltp=304.93
+[RMS-TICKER] TATASTEEL total=-0.63 (realized=0.00 + unrealized=-0.63) thresh
+old=-3.98 usage=15.8% qty=2 side=SELL ltp=199.24
+[LTP-WS] ticks=1600 symbols_seen=9/9 rate~12.3/s sources={'mid': 1600, 'bid'
+: 0, 'ask': 0, 'ltp': 0}
+[RMS-TICKER] NTPC total=-0.55 (realized=0.00 + unrealized=-0.55) threshold=-
+3.65 usage=15.1% qty=1 side=SELL ltp=365.75
+[RMS-TICKER] GAIL total=-0.18 (realized=0.00 + unrealized=-0.18) threshold=-
+3.50 usage=5.1% qty=2 side=SELL ltp=175.33
+[RMS-TICKER] VEDL total=1.18 (realized=0.00 + unrealized=1.18) threshold=-3.
+04 usage=-38.7% qty=1 side=BUY ltp=304.93
+[RMS-TICKER] TATASTEEL total=-0.52 (realized=0.00 + unrealized=-0.52) thresh
+old=-3.98 usage=13.1% qty=2 side=SELL ltp=199.18
+[LTP-WS] ticks=1800 symbols_seen=9/9 rate~5.7/s sources={'mid': 1800, 'bid':
+ 0, 'ask': 0, 'ltp': 0}
+[LTP-WS] ticks=2000 symbols_seen=9/9 rate~12.7/s sources={'mid': 2000, 'bid'
+: 0, 'ask': 0, 'ltp': 0}
+[RMS-TICKER] NTPC total=-0.30 (realized=0.00 + unrealized=-0.30) threshold=-
+3.65 usage=8.2% qty=1 side=SELL ltp=365.50
+[RMS-TICKER] GAIL total=-0.18 (realized=0.00 + unrealized=-0.18) threshold=-
+3.50 usage=5.1% qty=2 side=SELL ltp=175.33
+[RMS-TICKER] VEDL total=1.20 (realized=0.00 + unrealized=1.20) threshold=-3.
+04 usage=-39.5% qty=1 side=BUY ltp=304.95
+[RMS-TICKER] TATASTEEL total=-0.48 (realized=0.00 + unrealized=-0.48) thresh
+old=-3.98 usage=12.1% qty=2 side=SELL ltp=199.16
+[LTP-WS] ticks=2200 symbols_seen=9/9 rate~6.6/s sources={'mid': 2200, 'bid':
+ 0, 'ask': 0, 'ltp': 0}
+[RMS-TICKER] NTPC total=-0.18 (realized=0.00 + unrealized=-0.18) threshold=-
+3.65 usage=4.8% qty=1 side=SELL ltp=365.38
+[RMS-TICKER] GAIL total=-0.10 (realized=0.00 + unrealized=-0.10) threshold=-
+3.50 usage=2.9% qty=2 side=SELL ltp=175.29
+[RMS-TICKER] VEDL total=1.23 (realized=0.00 + unrealized=1.23) threshold=-3.
+04 usage=-40.3% qty=1 side=BUY ltp=304.98
+[RMS-TICKER] TATASTEEL total=-0.42 (realized=0.00 + unrealized=-0.42) thresh
+old=-3.98 usage=10.6% qty=2 side=SELL ltp=199.13
+[LTP-WS] ticks=2400 symbols_seen=9/9 rate~8.2/s sources={'mid': 2400, 'bid':
+ 0, 'ask': 0, 'ltp': 0}
+[RMS-TICKER] NTPC total=-0.03 (realized=0.00 + unrealized=-0.03) threshold=-
+3.65 usage=0.7% qty=1 side=SELL ltp=365.23
+[LTP-WS] ticks=2600 symbols_seen=9/9 rate~10.2/s sources={'mid': 2600, 'bid'
+: 0, 'ask': 0, 'ltp': 0}
+:[RMS-TICKER] GAIL total=0.14 (realized=0.00 + unrealized=0.14) threshold=-3
+.50 usage=-4.0% qty=2 side=SELL ltp=175.17
+[RMS-TICKER] VEDL total=1.32 (realized=0.00 + unrealized=1.32) threshold=-3.
+04 usage=-43.6% qty=1 side=BUY ltp=305.07                                  [
+RMS-TICKER] TATASTEEL total=-0.41 (realized=0.00 + unrealized=-0.41) thresho
+ld=-3.98 usage=10.3% qty=2 side=SELL ltp=199.12
+
