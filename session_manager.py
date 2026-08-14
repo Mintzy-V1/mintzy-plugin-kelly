@@ -447,6 +447,128 @@ class SessionManager:
             print(f"[SessionManager] Error cleaning up worker {session_id}: {e}")
         finally:
             cls._workers.pop(session_id, None)
+
+    @classmethod
+    def _pid_alive(cls, pid: int) -> bool:
+        try:
+            os.kill(pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+
+    @classmethod
+    def _get_redis_pid(cls, session_id: str) -> Optional[int]:
+        try:
+            pid_str = cls._redis().get(f"{cls.REDIS_KEY_PREFIX}{session_id}")
+            return int(pid_str) if pid_str else None
+        except Exception:
+            return None
+
+    @classmethod
+    def _wait_for_pid_exit(cls, pid: int, timeout: float = 90.0) -> bool:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if not cls._pid_alive(pid):
+                return True
+            time.sleep(0.5)
+        return not cls._pid_alive(pid)
+
+    @classmethod
+    def _reconcile_session_registry(cls, session_id: str) -> None:
+        """
+        Drop stale local/Redis worker entries.
+        Needed when stop-simulation runs on a different gunicorn worker than start.
+        """
+        worker = cls._workers.get(session_id)
+        redis_pid = cls._get_redis_pid(session_id)
+
+        if worker and not worker.is_alive():
+            print(f"[SessionManager] Reconcile: dead local worker for {session_id}")
+            cls._cleanup_worker(session_id)
+            worker = None
+
+        if worker and worker.is_alive():
+            local_pid = worker.process.pid
+            if redis_pid is None:
+                print(
+                    f"[SessionManager] Reconcile: local worker PID={local_pid} for {session_id} "
+                    "but Redis entry cleared (cross-worker stop) — cleaning up"
+                )
+                worker.stop_event.set()
+                worker.process.join(timeout=5)
+                if worker.is_alive():
+                    try:
+                        worker.process.terminate()
+                        worker.process.join(timeout=3)
+                    except Exception:
+                        pass
+                cls._cleanup_worker(session_id)
+            elif redis_pid != local_pid:
+                print(
+                    f"[SessionManager] Reconcile: PID mismatch local={local_pid} redis={redis_pid} "
+                    f"for {session_id} — cleaning up local registry"
+                )
+                cls._cleanup_worker(session_id)
+
+        redis_pid = cls._get_redis_pid(session_id)
+        if redis_pid is not None and not cls._pid_alive(redis_pid):
+            print(f"[SessionManager] Reconcile: Redis PID={redis_pid} for {session_id} is dead — clearing")
+            try:
+                cls._redis().delete(f"{cls.REDIS_KEY_PREFIX}{session_id}")
+            except Exception as e:
+                print(f"[SessionManager] Redis delete failed during reconcile: {e}")
+            cls._workers.pop(session_id, None)
+
+    @classmethod
+    def ensure_worker_stopped(cls, session_id: str, timeout: float = 90.0) -> bool:
+        """Block until no live worker remains for this session (local registry + Redis PID)."""
+        cls._reconcile_session_registry(session_id)
+
+        worker = cls._workers.get(session_id)
+        if worker and worker.is_alive():
+            print(f"[SessionManager] ensure_worker_stopped: signaling local worker {session_id}")
+            worker.stop_event.set()
+            worker.process.join(timeout=min(timeout, 60))
+            if worker.is_alive():
+                try:
+                    worker.process.terminate()
+                    worker.process.join(timeout=5)
+                except Exception:
+                    pass
+            cls._cleanup_worker(session_id)
+
+        redis_pid = cls._get_redis_pid(session_id)
+        if redis_pid and cls._pid_alive(redis_pid):
+            print(f"[SessionManager] ensure_worker_stopped: SIGTERM PID={redis_pid} for {session_id}")
+            try:
+                os.kill(redis_pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            if not cls._wait_for_pid_exit(redis_pid, timeout):
+                print(f"[SessionManager] ensure_worker_stopped: SIGKILL PID={redis_pid} for {session_id}")
+                try:
+                    os.kill(redis_pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                cls._wait_for_pid_exit(redis_pid, 10)
+
+        try:
+            cls._redis().delete(f"{cls.REDIS_KEY_PREFIX}{session_id}")
+        except Exception:
+            pass
+
+        cls._reconcile_session_registry(session_id)
+        redis_pid = cls._get_redis_pid(session_id)
+        still_running = session_id in cls._workers or (
+            redis_pid is not None and cls._pid_alive(redis_pid)
+        )
+        if still_running:
+            print(f"[SessionManager] ensure_worker_stopped: worker still alive for {session_id}")
+            return False
+        print(f"[SessionManager] ensure_worker_stopped: {session_id} is clear")
+        return True
     
     @classmethod
     def start_session(cls, session_id: str, session_doc: dict, trading_logs_collection):
@@ -454,6 +576,8 @@ class SessionManager:
         
         # Start monitor if not running
         cls._start_monitor()
+
+        cls._reconcile_session_registry(session_id)
         
         # Check if session already exists
         if session_id in cls._workers:
@@ -464,6 +588,11 @@ class SessionManager:
             else:
                 print(f"[SessionManager] Session already running: {session_id}")
                 raise RuntimeError(f"Session {session_id} is already running")
+
+        redis_pid = cls._get_redis_pid(session_id)
+        if redis_pid is not None and cls._pid_alive(redis_pid):
+            print(f"[SessionManager] Session already running (Redis PID={redis_pid}): {session_id}")
+            raise RuntimeError(f"Session {session_id} is already running")
         
         # Check worker limit
         active_workers = sum(1 for w in cls._workers.values() if w.is_alive())
@@ -641,8 +770,14 @@ class SessionManager:
                         proc.wait(timeout=60)
                         print(f"[SessionManager] Process {pid} gracefully band ho gaya")
                     except ImportError:
-                        print("[SessionManager] psutil not installed — waiting without process handle")
-                        time.sleep(5)
+                        print("[SessionManager] psutil not installed — polling PID until exit")
+                        if not cls._wait_for_pid_exit(pid, timeout=90):
+                            print(f"[SessionManager] PID={pid} still alive after 90s — SIGKILL")
+                            try:
+                                os.kill(pid, signal.SIGKILL)
+                            except ProcessLookupError:
+                                pass
+                            cls._wait_for_pid_exit(pid, timeout=10)
                     except Exception as wait_err:
                         if wait_err.__class__.__name__ == "TimeoutExpired":
                             print(f"[SessionManager] 60s baad bhi alive — SIGKILL bhej raha hoon...")
@@ -702,6 +837,11 @@ class SessionManager:
             return False
         stopped = cls.stop_session(session_id)
         cls._cleanup_worker(session_id)
+        if stopped:
+            fully_stopped = cls.ensure_worker_stopped(session_id, timeout=90)
+            if not fully_stopped:
+                print(f"[SessionManager] Simulation worker for {session_id} did not exit in time")
+                return False
         return stopped
     
     @classmethod

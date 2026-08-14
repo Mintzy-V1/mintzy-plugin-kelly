@@ -1074,12 +1074,20 @@ class AutoTrader:
     def _total_symbol_exposure(self, symbol):
         return self._stock_exposure(symbol) + self._reserved_exposure(symbol)
 
+    # ---------- LEVERAGED EXPOSURE CAP (internal only; DB/UI free_cash stays raw) ----------------
+
+    def _effective_exposure_cap(self) -> float:
+        """Order-sizing headroom = raw initial_capital × intraday leverage (default 4x)."""
+        base = float(self.initial_capital or 0.0)
+        return self.max_exposure_pct * base * PYRAMID_LEVERAGE_MULTIPLIER
+
     # ---------- EXPOSURE CAP CHECK (ATOMIC) ----------------
 
     def _can_reserve_exposure(self, symbol, order_value):
         t0 = time.time()
 
-        result = (self._total_symbol_exposure(symbol) + order_value) <= (self.max_exposure_pct * self.initial_capital)
+        cap = self._effective_exposure_cap()
+        result = (self._total_symbol_exposure(symbol) + order_value) <= cap
 
         elapsed = time.time() - t0
 
@@ -4363,6 +4371,12 @@ class AutoTrader:
 
                             with lock:
                                 if not self._can_reserve_exposure(sym, order_value):
+                                    print(
+                                        f"[DEBUG] exposure blocked {sym} order_value={order_value:.2f} "
+                                        f"cap={self._effective_exposure_cap():.2f} "
+                                        f"(raw_cash={float(self.initial_capital or 0):.2f} "
+                                        f"x{PYRAMID_LEVERAGE_MULTIPLIER})"
+                                    )
                                     continue
                                 self._reserve_exposure(sym, order_value)
                             

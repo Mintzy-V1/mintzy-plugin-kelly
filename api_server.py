@@ -2204,17 +2204,47 @@ async def start_trading(config: TradingConfig ,x_plugin_api_key: str = Header(No
 
         # DIRECTLY start trader using live session_data
         worker_started_perf = time.perf_counter()
-        try:
+        is_live_start = config.strategy != "B"
+        if is_live_start:
+            cleared = SessionManager.ensure_worker_stopped(session_id, timeout=90)
+            if not cleared:
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        "Previous simulation/trading worker did not shut down in time. "
+                        "Wait a few seconds and retry live start."
+                    ),
+                )
+
+        def _spawn_worker():
             SessionManager.start_session(
                 session_id=session_id,
                 session_doc=session_data,
-                trading_logs_collection=trading_logs_collection
+                trading_logs_collection=trading_logs_collection,
             )
+
+        try:
+            _spawn_worker()
         except RuntimeError as runtime_err:
             err_text = str(runtime_err)
             if "already running" in err_text.lower():
                 worker_status = SessionManager.get_session_status(session_id)
-                if worker_status and worker_status.get("is_alive"):
+                if is_live_start:
+                    print(
+                        f"[START-TRADING-DEBUG] Live start blocked by stale worker for {session_id} "
+                        "— forcing cleanup and retrying once"
+                    )
+                    if SessionManager.ensure_worker_stopped(session_id, timeout=30):
+                        _spawn_worker()
+                    else:
+                        raise HTTPException(
+                            status_code=503,
+                            detail=(
+                                "Could not replace the previous worker for live trading. "
+                                "Retry in a few seconds."
+                            ),
+                        )
+                elif worker_status and worker_status.get("is_alive"):
                     if is_simulation_start:
                         _sim_plugin_log(
                             "start_trading idempotent already running",
@@ -2231,7 +2261,11 @@ async def start_trading(config: TradingConfig ,x_plugin_api_key: str = Header(No
                         "symbols": [s.symbol for s in config.symbols],
                         "already_running": True,
                     }
-            raise
+                else:
+                    SessionManager.ensure_worker_stopped(session_id, timeout=30)
+                    _spawn_worker()
+            else:
+                raise
 
         if is_simulation_start:
             _sim_plugin_log(
