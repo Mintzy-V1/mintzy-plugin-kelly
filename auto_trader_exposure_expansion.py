@@ -37,7 +37,9 @@ DEFAULT_MONGO_CONFIG_DB_NAME = "test"
 
 # Rank-based pyramid multipliers (rank 1 = index 0, highest rank gets largest mult)
 PYR_MULTS = [1.40, 1.30, 1.20, 1.00, 1.00, 0.75, 0.75, 0.75, 0.75, 0.75]
-PYRAMID_MAX_DYNAMIC_MULTIPLIER = float(os.environ.get("PYRAMID_MAX_DYNAMIC_MULTIPLIER", "100"))
+
+# Nifty intraday leverage: use 4x of account free cash for pyramid allocation headroom
+PYRAMID_LEVERAGE_MULTIPLIER = float(os.environ.get("PYRAMID_LEVERAGE_MULTIPLIER", "4"))
 
 # 14:15 IST stop-lock — exit losers, continue with green symbols
 STOP_LOCK_TIME = dt_time(14, 15)
@@ -2183,10 +2185,13 @@ class AutoTrader:
             print("[PYRAMID] Skipping capital pyramid — real broker/session cash unavailable")
             return
 
-        free_cash = float(free_cash)
+        raw_free_cash = float(free_cash)
+        free_cash = raw_free_cash * PYRAMID_LEVERAGE_MULTIPLIER
         remaining_cash = free_cash - total_capital_allocated
         print(
-            f"[PYRAMID] free_cash={free_cash:.2f} "
+            f"[PYRAMID] raw_free_cash={raw_free_cash:.2f} "
+            f"leverage=x{PYRAMID_LEVERAGE_MULTIPLIER} "
+            f"effective_free_cash={free_cash:.2f} "
             f"total_capital_allocated={total_capital_allocated:.2f} "
             f"remaining_cash={remaining_cash:.2f} "
             f"evaluated_symbols={[sym for sym, _, _ in config_entries]}"
@@ -2246,12 +2251,6 @@ class AutoTrader:
         )
         if dynamic_multiplier <= 0:
             print(f"[PYRAMID] dynamic_multiplier <= 0 ({dynamic_multiplier:.4f}) — aborting update")
-            return
-        if dynamic_multiplier > PYRAMID_MAX_DYNAMIC_MULTIPLIER:
-            print(
-                f"[PYRAMID] dynamic_multiplier {dynamic_multiplier:.4f} exceeds cap "
-                f"{PYRAMID_MAX_DYNAMIC_MULTIPLIER} — aborting update (likely bad free_cash source)"
-            )
             return
 
         updated_by_symbol = {}
