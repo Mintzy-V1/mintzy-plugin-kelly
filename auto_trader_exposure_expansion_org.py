@@ -1029,8 +1029,9 @@ class AutoTrader:
 
     def _can_reserve_exposure(self, symbol, order_value):
         t0 = time.time()
+        leveraged_capital  = 4* self.initial_capital
 
-        result = (self._total_symbol_exposure(symbol) + order_value) <= (self.max_exposure_pct * self.initial_capital)
+        result = (self._total_symbol_exposure(symbol) + order_value) <= (self.max_exposure_pct * leveraged_capital)
 
         elapsed = time.time() - t0
 
@@ -2744,8 +2745,8 @@ class AutoTrader:
                     self.alerts.notify(msg)
                     self._exit_warning_sent = True
                 
-                # EXIT ALL POSITIONS AT 3:30 PM IST
-                market_exit_time = dt_time(15, 30)  # 3:30 PM IST
+                # EXIT ALL POSITIONS AT 3:40 PM IST
+                market_exit_time = dt_time(15, 40)  # 3:40 PM IST
                 
                 if now.time() >= market_exit_time:
                     print(f"\n[MARKET CLOSE] Current time: {now.strftime('%H:%M:%S')} - Initiating shutdown")
