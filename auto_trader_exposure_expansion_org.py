@@ -85,6 +85,9 @@ class TimingLogger:
 # Market timezone: IST (UTC+5:30)
 MARKET_TZ = timezone(timedelta(hours=5, minutes=30))
 
+# 12:00 IST stop-lock — exit losers, continue with green symbols
+STOP_LOCK_TIME = dt_time(12, 0)
+
 
 def load_json(path):
     try:
@@ -532,6 +535,7 @@ class AutoTrader:
         self.trade_history = []
         self.stop_event = threading.Event()
         self._exit_warning_sent = False
+        self._stoplock_done = False
         self.positions_lock = threading.Lock()   #  ADD THIS LINE
         self._exited_symbols = set()  # Symbols manually exited Ã¢â‚¬â€ excluded from future cycles
 
@@ -2393,6 +2397,93 @@ class AutoTrader:
 
         return round(pnl, 2)
 
+    @staticmethod
+    def _normalize_config_symbol(symbol: str) -> str:
+        return (symbol or "").upper().replace("-EQ", "").strip()
+
+    def _get_symbol_position_qty(self, symbol: str) -> int:
+        symbol = self._normalize_config_symbol(symbol)
+        with self.positions_lock:
+            pos = self.positions.get(symbol)
+            if pos:
+                return int(pos.get("qty") or 0)
+        with self.broker_pos_lock:
+            for pos in self._broker_positions_cache or []:
+                if pos.get("symbol") == symbol:
+                    return int(pos.get("qty") or 0)
+        return 0
+
+    def _get_symbol_unrealized_pnl(self, symbol: str) -> float:
+        symbol = self._normalize_config_symbol(symbol)
+        with self.live_pnl_lock:
+            tick = self.live_pnl.get(symbol)
+            if tick is not None:
+                return float(tick.get("pnl") or 0.0)
+
+        cache = getattr(self, "_cycle_ltp_cache", {}) or {}
+        ltp = cache.get(symbol)
+        if ltp is not None and float(ltp) > 0:
+            return float(self._calculate_pnl(symbol, float(ltp)))
+
+        with self.broker_pos_lock:
+            for pos in self._broker_positions_cache or []:
+                if pos.get("symbol") == symbol:
+                    ltp = float(pos.get("ltp") or 0.0)
+                    if ltp > 0:
+                        return float(self._calculate_pnl(symbol, ltp))
+        return 0.0
+
+    def _run_stoplock_exits(self, active_symbols: list) -> None:
+        """At 12:00 IST exit open symbols with unrealized_pnl < 0; continue with the rest."""
+        now = self._now_market_time()
+        print(
+            f"[STOPLOCK] Check at {now.strftime('%Y-%m-%d %H:%M:%S')} IST "
+            f"(trigger>={STOP_LOCK_TIME.strftime('%H:%M')})"
+        )
+
+        symbols_to_check = {
+            self._normalize_config_symbol(s) for s in (active_symbols or []) if s
+        }
+
+        with self.broker_pos_lock:
+            self._broker_positions_cache = self._get_broker_positions()
+            for pos in self._broker_positions_cache or []:
+                sym = self._normalize_config_symbol(pos.get("symbol"))
+                if sym:
+                    symbols_to_check.add(sym)
+
+        exited = []
+        continuing = []
+        for sym_key in sorted(symbols_to_check):
+            if sym_key in self._exited_symbols:
+                continue
+
+            qty = self._get_symbol_position_qty(sym_key)
+            if qty == 0:
+                continuing.append(f"{sym_key}(flat)")
+                continue
+
+            unrealized = self._get_symbol_unrealized_pnl(sym_key)
+            if unrealized < 0:
+                print(f"[STOPLOCK] {sym_key} unrealized={unrealized:.2f} — placing exit")
+                result = self.exit_single_position(sym_key)
+                if result.get("success"):
+                    exited.append(sym_key)
+                else:
+                    print(
+                        f"[STOPLOCK] {sym_key} exit failed: "
+                        f"{result.get('message', 'unknown error')}"
+                    )
+            else:
+                continuing.append(f"{sym_key}(unrealized={unrealized:.2f})")
+
+        summary = (
+            f"12:00 stop-lock complete — exited: {exited or 'none'}; "
+            f"continuing: {continuing}"
+        )
+        print(f"[STOPLOCK] {summary}")
+        self.alerts.notify(summary)
+
     def convert_candle_to_seconds(self, c):
         c = str(c).lower().strip()
 
@@ -2736,6 +2827,10 @@ class AutoTrader:
                 # DOUBLE-EXECUTION GUARD (ONE EXECUTION PER CANDLE)
                 # =====================================================
                 now = self._now_market_time()
+
+                if not self._stoplock_done and now.time() >= STOP_LOCK_TIME:
+                    self._run_stoplock_exits(symbols)
+                    self._stoplock_done = True
 
                 #temp change 
                 warning_time = dt_time(15, 25)  # 3:25 PM IST

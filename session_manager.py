@@ -21,6 +21,8 @@ import signal
 
 SIMULATION_STOP_PREFIX = "autotrader:simulation_stop:"
 SIMULATION_STOP_TTL = 300
+PYRAMID_RESULT_PREFIX = "autotrader:pyramid_result:"
+PYRAMID_RESULT_TTL = 600
 
 
 
@@ -247,6 +249,29 @@ def _trader_worker(
             print("shutdown called successfully")
             trader_thread.join(timeout=60)
 
+            handoff = getattr(trader, "_pyramid_handoff_result", None)
+            if handoff is None:
+                handoff = {
+                    "applied": False,
+                    "live_allowed": True,
+                    "reason": "pyramid_not_run",
+                    "profitable_count": 0,
+                    "symbols_for_live": [],
+                }
+            if exit_redis_client:
+                try:
+                    exit_redis_client.setex(
+                        f"{PYRAMID_RESULT_PREFIX}{session_id}",
+                        PYRAMID_RESULT_TTL,
+                        json.dumps(handoff),
+                    )
+                    print(
+                        f"[Worker-{session_id}] Pyramid handoff stored in Redis "
+                        f"(live_allowed={handoff.get('live_allowed')}, reason={handoff.get('reason')})"
+                    )
+                except Exception as e:
+                    print(f"[Worker-{session_id}] Failed to store pyramid handoff in Redis: {e}")
+
         if ltp_stream is not None:
             try:
                 ltp_stream.stop()
@@ -346,6 +371,30 @@ class SessionManager:
     REDIS_KEY_PREFIX = "autotrader:session:"
     SIMULATION_STOP_PREFIX = SIMULATION_STOP_PREFIX
     SIMULATION_STOP_TTL = SIMULATION_STOP_TTL
+    PYRAMID_RESULT_PREFIX = PYRAMID_RESULT_PREFIX
+    PYRAMID_RESULT_TTL = PYRAMID_RESULT_TTL
+
+    @classmethod
+    def _pyramid_result_key(cls, session_id: str) -> str:
+        return f"{cls.PYRAMID_RESULT_PREFIX}{session_id}"
+
+    @classmethod
+    def read_pyramid_handoff_result(cls, session_id: str):
+        try:
+            raw = cls._redis().get(cls._pyramid_result_key(session_id))
+            if not raw:
+                return None
+            return json.loads(raw)
+        except Exception as e:
+            print(f"[SessionManager] Failed to read pyramid handoff for {session_id}: {e}")
+            return None
+
+    @classmethod
+    def clear_pyramid_handoff_result(cls, session_id: str) -> None:
+        try:
+            cls._redis().delete(cls._pyramid_result_key(session_id))
+        except Exception as e:
+            print(f"[SessionManager] Failed to clear pyramid handoff for {session_id}: {e}")
 
     @classmethod
     def _simulation_stop_key(cls, session_id: str) -> str:

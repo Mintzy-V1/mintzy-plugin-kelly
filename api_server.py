@@ -2633,8 +2633,9 @@ def get_final_tradebook(
 @app.post("/api/trading/stop-simulation/{session_id}")
 async def stop_trading_simulation(session_id: str, x_plugin_api_key: str = Header(None)):
     """
-    Stop the paper simulation worker only. Keeps session auth (status=authenticated)
-    so the same session_id can start live trading later via POST /api/trading/start.
+    Stop the paper simulation worker.
+    If pyramid finds profitable symbols: keeps session authenticated for live handoff.
+    If no profitable symbols: marks session stopped (new session required for live).
     """
     endpoint_started_perf = time.perf_counter()
     endpoint_started_ms = _sim_plugin_now_ms()
@@ -2698,21 +2699,112 @@ async def stop_trading_simulation(session_id: str, x_plugin_api_key: str = Heade
             detail="Failed to stop paper simulation (simulation-stop flag or worker shutdown failed)",
         )
 
-    if session_id in trading_status:
-        trading_status[session_id]["status"] = "simulation_stopped"
+    pyramid_handoff = SessionManager.read_pyramid_handoff_result(session_id) or {}
+    live_allowed = bool(pyramid_handoff.get("live_allowed", True))
+    _sim_plugin_log(
+        "stop-simulation phase=pyramid_handoff",
+        session_id=session_id,
+        live_allowed=live_allowed,
+        pyramid_reason=pyramid_handoff.get("reason"),
+        profitable_count=pyramid_handoff.get("profitable_count"),
+        symbols_for_live=len(pyramid_handoff.get("symbols_for_live") or []),
+    )
+
+    post_restore_configuration_id = (
+        sessions_store.get(session_id, {}).get("configuration_id")
+        or (db_record or {}).get("configuration_id")
+    )
 
     restore_started_perf = time.perf_counter()
     restored = await get_or_restore_session(session_id)
+
+    if not live_allowed:
+        if session_id in sessions_store:
+            sessions_store[session_id]["status"] = "stopped"
+        elif restored:
+            sessions_store[session_id] = {**restored, "status": "stopped"}
+        elif session_id not in sessions_store:
+            sessions_store[session_id] = {
+                "session_id": session_id,
+                "status": "stopped",
+                "configuration_id": post_restore_configuration_id,
+            }
+
+        if session_id in trading_status:
+            trading_status[session_id]["status"] = "stopped"
+        else:
+            trading_status[session_id] = {"status": "stopped"}
+
+        if post_restore_configuration_id and session_id in sessions_store:
+            sessions_store[session_id]["configuration_id"] = post_restore_configuration_id
+
+        _sim_plugin_log(
+            "stop-simulation phase=mark_stopped_no_profitable_symbols",
+            session_id=session_id,
+            post_restore_status=sessions_store.get(session_id, {}).get("status"),
+            configuration_id=post_restore_configuration_id,
+            elapsed_ms=_sim_plugin_elapsed_ms(restore_started_perf),
+        )
+
+        try:
+            persist_started_perf = time.perf_counter()
+            persist_payload = {
+                "status": "stopped",
+                "trading_status": "stopped",
+                "stopped_reason": pyramid_handoff.get("reason") or "no_profitable_symbols",
+            }
+            if post_restore_configuration_id:
+                persist_payload["configuration_id"] = post_restore_configuration_id
+            persist_session_metadata_sync(session_id, persist_payload)
+            _sim_plugin_log(
+                "stop-simulation phase=persist_session_metadata_sync",
+                session_id=session_id,
+                elapsed_ms=_sim_plugin_elapsed_ms(persist_started_perf),
+            )
+        except Exception as persist_err:
+            _sim_plugin_log(
+                "stop-simulation persist warning",
+                session_id=session_id,
+                error=str(persist_err),
+            )
+
+        SessionManager.clear_pyramid_handoff_result(session_id)
+        add_log(
+            session_id,
+            "Paper simulation stopped — no profitable symbols; session marked stopped",
+        )
+
+        response_payload = {
+            "success": True,
+            "live_allowed": False,
+            "pyramid": pyramid_handoff,
+            "message": (
+                "Simulation stopped. No profitable symbols — session closed. "
+                "Create a new session for live trading."
+            ),
+            "session_id": session_id,
+            "status": "stopped",
+            "trading_status": "stopped",
+            "configuration_id": post_restore_configuration_id,
+            "timing_ms": _sim_plugin_elapsed_ms(endpoint_started_perf),
+        }
+        _sim_plugin_log(
+            "POST /api/trading/stop-simulation EXIT stopped_no_live",
+            session_id=session_id,
+            configuration_id=post_restore_configuration_id,
+            total_elapsed_ms=_sim_plugin_elapsed_ms(endpoint_started_perf),
+        )
+        return response_payload
+
+    if session_id in trading_status:
+        trading_status[session_id]["status"] = "simulation_stopped"
+
     if session_id in sessions_store:
         sessions_store[session_id]["status"] = "authenticated"
     elif restored:
         sessions_store[session_id] = {**restored, "status": "authenticated"}
 
     post_restore_status = sessions_store.get(session_id, {}).get("status")
-    post_restore_configuration_id = (
-        sessions_store.get(session_id, {}).get("configuration_id")
-        or (db_record or {}).get("configuration_id")
-    )
     if post_restore_configuration_id and session_id in sessions_store:
         sessions_store[session_id]["configuration_id"] = post_restore_configuration_id
 
@@ -2746,12 +2838,16 @@ async def stop_trading_simulation(session_id: str, x_plugin_api_key: str = Heade
             error=str(persist_err),
         )
 
+    SessionManager.clear_pyramid_handoff_result(session_id)
     add_log(session_id, "Paper simulation stopped (session remains authenticated)")
 
     response_payload = {
         "success": True,
+        "live_allowed": True,
+        "pyramid": pyramid_handoff,
         "message": "Simulation stopped; session remains authenticated",
         "session_id": session_id,
+        "status": "authenticated",
         "trading_status": "simulation_stopped",
         "configuration_id": post_restore_configuration_id,
         "timing_ms": _sim_plugin_elapsed_ms(endpoint_started_perf),
