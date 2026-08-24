@@ -41,9 +41,6 @@ PYR_MULTS = [1.40, 1.30, 1.20, 1.00, 1.00, 0.75, 0.75, 0.75, 0.75, 0.75]
 # Nifty intraday leverage: use 4x of account free cash for pyramid allocation headroom
 PYRAMID_LEVERAGE_MULTIPLIER = float(os.environ.get("PYRAMID_LEVERAGE_MULTIPLIER", "4"))
 
-# 14:15 IST stop-lock — exit losers, continue with green symbols
-STOP_LOCK_TIME = dt_time(14, 15)
-
 
 def pyramid_multiplier_for_rank(rank) -> Optional[float]:
     try:
@@ -577,7 +574,6 @@ class AutoTrader:
         self.trade_history = []
         self.stop_event = threading.Event()
         self._exit_warning_sent = False
-        self._1415_stoplock_done = False
         self.positions_lock = threading.Lock()   #  ADD THIS LINE
         self._exited_symbols = set()  # Symbols manually exited Ã¢â‚¬â€ excluded from future cycles
 
@@ -2153,37 +2149,99 @@ class AutoTrader:
         )
         return None
 
-    def _apply_capital_pyramid_on_stop(self) -> None:
+    @staticmethod
+    def _build_pyramid_handoff_result(
+        *,
+        applied: bool,
+        live_allowed: bool,
+        reason: str,
+        profitable_count: int = 0,
+        symbols_for_live=None,
+        removed_symbols=None,
+    ) -> dict:
+        return {
+            "applied": applied,
+            "live_allowed": live_allowed,
+            "reason": reason,
+            "profitable_count": profitable_count,
+            "symbols_for_live": symbols_for_live or [],
+            "removed_symbols": removed_symbols or [],
+        }
+
+    def _symbols_for_live_from_entries(self, updated_by_symbol: dict) -> list:
+        rows = []
+        allocations = getattr(self, "symbol_allocations", {}) or {}
+        for sym_key, entry in updated_by_symbol.items():
+            stop_loss = entry.get("stop_loss")
+            if stop_loss is None:
+                stop_loss = (allocations.get(sym_key) or {}).get("stop_loss", 0.05)
+            rows.append(
+                {
+                    "symbol": sym_key,
+                    "capital": float(entry.get("capital") or 0),
+                    "stop_loss": float(stop_loss or 0.05),
+                }
+            )
+        return [row for row in rows if row["symbol"] and row["capital"] > 0]
+
+    def _apply_capital_pyramid_on_stop(self) -> dict:
         if getattr(self, "_pyramid_applied", False):
             print("[PYRAMID] Already applied — skipping duplicate stop")
-            return
+            cached = getattr(self, "_pyramid_handoff_result", None)
+            if cached:
+                return cached
+            return self._build_pyramid_handoff_result(
+                applied=True,
+                live_allowed=True,
+                reason="already_applied",
+            )
 
         configuration_id = getattr(self, "configuration_id", None)
         if not configuration_id:
             print("[PYRAMID] configuration_id missing — skipping capital pyramid update")
-            return
+            return self._build_pyramid_handoff_result(
+                applied=False,
+                live_allowed=True,
+                reason="configuration_id_missing",
+            )
 
         config_doc = self._fetch_saved_trading_configuration(configuration_id)
         if not config_doc:
-            return
+            return self._build_pyramid_handoff_result(
+                applied=False,
+                live_allowed=True,
+                reason="configuration_not_found",
+            )
 
         symbols_list, set_path = self._get_configuration_symbols_ref(config_doc)
         if symbols_list is None or set_path is None:
             print(f"[PYRAMID] configuration symbols not found for {configuration_id}")
-            return
+            return self._build_pyramid_handoff_result(
+                applied=False,
+                live_allowed=True,
+                reason="configuration_symbols_missing",
+            )
 
         rank_map = self._build_configuration_rank_map(config_doc)
         config_entries = self._build_pyramid_config_entries(config_doc, symbols_list, rank_map)
         if not config_entries:
             print("[PYRAMID] No symbols with capital to evaluate — aborting update")
-            return
+            return self._build_pyramid_handoff_result(
+                applied=False,
+                live_allowed=True,
+                reason="no_symbols_to_evaluate",
+            )
 
         active_symbols = self._get_pyramid_active_symbol_keys()
         total_capital_allocated = sum(cap for _, _, cap in config_entries)
         free_cash = self._get_pyramid_free_cash()
         if free_cash is None:
             print("[PYRAMID] Skipping capital pyramid — real broker/session cash unavailable")
-            return
+            return self._build_pyramid_handoff_result(
+                applied=False,
+                live_allowed=True,
+                reason="broker_cash_unavailable",
+            )
 
         raw_free_cash = float(free_cash)
         free_cash = raw_free_cash * PYRAMID_LEVERAGE_MULTIPLIER
@@ -2216,7 +2274,12 @@ class AutoTrader:
                 "[PYRAMID] No symbols with unrealized_pnl > 0 — "
                 "skipping Mongo update (master config preserved)"
             )
-            return
+            return self._build_pyramid_handoff_result(
+                applied=False,
+                live_allowed=False,
+                reason="no_profitable_symbols",
+                removed_symbols=[item.split("(")[0] for item in removed],
+            )
 
         profitable_static = []
         for sym_key, entry, current_capital, unrealized in profitable:
@@ -2237,12 +2300,21 @@ class AutoTrader:
 
         if not profitable_static:
             print("[PYRAMID] No profitable symbols with valid rank — aborting update")
-            return
+            return self._build_pyramid_handoff_result(
+                applied=False,
+                live_allowed=False,
+                reason="no_profitable_with_valid_rank",
+                removed_symbols=[item.split("(")[0] for item in removed],
+            )
 
         capital_after_static_sum = sum(item[5] for item in profitable_static)
         if capital_after_static_sum <= 0:
             print("[PYRAMID] Sum of capital after static multiplier <= 0 — aborting")
-            return
+            return self._build_pyramid_handoff_result(
+                applied=False,
+                live_allowed=False,
+                reason="capital_after_static_non_positive",
+            )
 
         dynamic_multiplier = remaining_cash / capital_after_static_sum
         print(
@@ -2251,7 +2323,11 @@ class AutoTrader:
         )
         if dynamic_multiplier <= 0:
             print(f"[PYRAMID] dynamic_multiplier <= 0 ({dynamic_multiplier:.4f}) — aborting update")
-            return
+            return self._build_pyramid_handoff_result(
+                applied=False,
+                live_allowed=False,
+                reason="dynamic_multiplier_non_positive",
+            )
 
         updated_by_symbol = {}
         for (
@@ -2279,7 +2355,11 @@ class AutoTrader:
 
         if not updated_by_symbol:
             print("[PYRAMID] No profitable symbols with valid rank — aborting update")
-            return
+            return self._build_pyramid_handoff_result(
+                applied=False,
+                live_allowed=False,
+                reason="no_symbols_updated",
+            )
 
         saved = self._persist_pyramid_merged_updates(
             config_doc=config_doc,
@@ -2289,56 +2369,27 @@ class AutoTrader:
             updated_count=len(updated_by_symbol),
             configuration_id=configuration_id,
         )
+        symbols_for_live = self._symbols_for_live_from_entries(updated_by_symbol)
         if saved:
             self._pyramid_applied = True
+            result = self._build_pyramid_handoff_result(
+                applied=True,
+                live_allowed=len(symbols_for_live) > 0,
+                reason="ok" if symbols_for_live else "no_symbols_for_live",
+                profitable_count=len(symbols_for_live),
+                symbols_for_live=symbols_for_live,
+                removed_symbols=sorted(removed_keys),
+            )
+            self._pyramid_handoff_result_cache = result
+            return result
 
-    def _run_1415_stoplock_exits(self, active_symbols: list) -> None:
-        """At 14:15 IST exit open symbols with unrealized_pnl < 0; continue with the rest."""
-        now = self._now_market_time()
-        print(f"[1415-STOPLOCK] Check at {now.strftime('%Y-%m-%d %H:%M:%S')} IST")
-
-        symbols_to_check = {
-            self._normalize_config_symbol(s) for s in (active_symbols or []) if s
-        }
-
-        with self.broker_pos_lock:
-            self._broker_positions_cache = self._get_broker_positions()
-            for pos in self._broker_positions_cache or []:
-                sym = self._normalize_config_symbol(pos.get("symbol"))
-                if sym:
-                    symbols_to_check.add(sym)
-
-        exited = []
-        continuing = []
-        for sym_key in sorted(symbols_to_check):
-            if sym_key in self._exited_symbols:
-                continue
-
-            qty = self._get_symbol_position_qty(sym_key)
-            if qty == 0:
-                continuing.append(f"{sym_key}(flat)")
-                continue
-
-            unrealized = self._get_symbol_unrealized_pnl(sym_key)
-            if unrealized < 0:
-                print(f"[1415-STOPLOCK] {sym_key} unrealized={unrealized:.2f} — placing exit")
-                result = self.exit_single_position(sym_key)
-                if result.get("success"):
-                    exited.append(sym_key)
-                else:
-                    print(
-                        f"[1415-STOPLOCK] {sym_key} exit failed: "
-                        f"{result.get('message', 'unknown error')}"
-                    )
-            else:
-                continuing.append(f"{sym_key}(unrealized={unrealized:.2f})")
-
-        summary = (
-            f"14:15 stop-lock complete — exited: {exited or 'none'}; "
-            f"continuing: {continuing}"
+        return self._build_pyramid_handoff_result(
+            applied=False,
+            live_allowed=len(symbols_for_live) > 0,
+            reason="mongo_save_failed",
+            profitable_count=len(symbols_for_live),
+            symbols_for_live=symbols_for_live,
         )
-        print(f"[1415-STOPLOCK] {summary}")
-        self.alerts.notify(summary)
 
     def _persist_paper_state_snapshot(self, event: str = "") -> None:
         """Refresh in-memory UI only — do not append MongoDB rows mid-cycle."""
@@ -3817,10 +3868,6 @@ class AutoTrader:
                 # =====================================================
                 now = self._now_market_time()
 
-                if not self._1415_stoplock_done and now.time() >= STOP_LOCK_TIME:
-                    self._run_1415_stoplock_exits(symbols)
-                    self._1415_stoplock_done = True
-
                 #temp change 
                 warning_time = dt_time(15, 25)  # 3:25 PM IST
                 if now.time() >= warning_time and not self._exit_warning_sent:
@@ -4924,10 +4971,20 @@ class AutoTrader:
     def shutdown(self):
         print("[SHUTDOWN] Paper stop — applying capital pyramid update (no square-off)...")
         try:
-            self._apply_capital_pyramid_on_stop()
+            self._pyramid_handoff_result = self._apply_capital_pyramid_on_stop()
+            print(
+                f"[PYRAMID] handoff result: live_allowed={self._pyramid_handoff_result.get('live_allowed')} "
+                f"reason={self._pyramid_handoff_result.get('reason')} "
+                f"profitable_count={self._pyramid_handoff_result.get('profitable_count')}"
+            )
         except Exception as e:
             print(f"[SHUTDOWN] Capital pyramid update failed: {e}")
             traceback.print_exc()
+            self._pyramid_handoff_result = self._build_pyramid_handoff_result(
+                applied=False,
+                live_allowed=True,
+                reason="pyramid_exception",
+            )
         
         if hasattr(self, 'parallel_executor') and self.parallel_executor:
             self.parallel_executor.stop()
