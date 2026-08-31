@@ -21,6 +21,8 @@ import signal
 
 SIMULATION_STOP_PREFIX = "autotrader:simulation_stop:"
 SIMULATION_STOP_TTL = 300
+PYRAMID_RESULT_PREFIX = "autotrader:pyramid_result:"
+PYRAMID_RESULT_TTL = 600
 
 
 
@@ -62,6 +64,7 @@ def _trader_worker(
     mongo_db_name: str,
     configuration_id: Optional[str] = None,
     mongo_config_db_name: Optional[str] = None,
+    leverage_multiplier: Optional[float] = None,
 ):
     """
     Worker process that runs a single AutoTrader instance.
@@ -158,11 +161,23 @@ def _trader_worker(
         trader.session_id = session_id
         trader.broker_live_session = restored
         trader.broker_session_payload = broker_config.get("broker_session")
+        session_free_cash = broker_config.get("free_cash")
+        if session_free_cash is not None:
+            try:
+                trader.session_free_cash = float(session_free_cash)
+            except (TypeError, ValueError):
+                pass
         trader.session = restored
         trader.ui_session_id = session_id
         trader.symbol_allocations = {k: v["capital"] for k, v in allocations.items()}
         trader.initial_allocations = allocations
         trader.configuration_id = configuration_id
+        trader.simulation_logs = strategy == "B"
+        if leverage_multiplier is not None:
+            try:
+                trader.leverage_multiplier = float(leverage_multiplier)
+            except (TypeError, ValueError):
+                trader.leverage_multiplier = None
         
         # Signal that we're healthy and starting
         health_queue.put({
@@ -194,7 +209,10 @@ def _trader_worker(
         trader_thread = threading.Thread(
             target=trader.start,
             args=(symbols, time_frame, candle),
-            kwargs={"initial_allocations": allocations},
+            kwargs={
+                "initial_allocations": allocations,
+                "leverage_multiplier": leverage_multiplier,
+            },
             daemon=False  # Don't make daemon - we want proper cleanup
         )
         trader_thread.start()
@@ -240,6 +258,29 @@ def _trader_worker(
             trader.shutdown() # but inside the shutdown we have not write the logic of exiting the orders and all and in the while loop we have not checked the stop_event flag
             print("shutdown called successfully")
             trader_thread.join(timeout=60)
+
+            handoff = getattr(trader, "_pyramid_handoff_result", None)
+            if handoff is None:
+                handoff = {
+                    "applied": False,
+                    "live_allowed": True,
+                    "reason": "pyramid_not_run",
+                    "profitable_count": 0,
+                    "symbols_for_live": [],
+                }
+            if exit_redis_client:
+                try:
+                    exit_redis_client.setex(
+                        f"{PYRAMID_RESULT_PREFIX}{session_id}",
+                        PYRAMID_RESULT_TTL,
+                        json.dumps(handoff),
+                    )
+                    print(
+                        f"[Worker-{session_id}] Pyramid handoff stored in Redis "
+                        f"(live_allowed={handoff.get('live_allowed')}, reason={handoff.get('reason')})"
+                    )
+                except Exception as e:
+                    print(f"[Worker-{session_id}] Failed to store pyramid handoff in Redis: {e}")
 
         if ltp_stream is not None:
             try:
@@ -340,6 +381,30 @@ class SessionManager:
     REDIS_KEY_PREFIX = "autotrader:session:"
     SIMULATION_STOP_PREFIX = SIMULATION_STOP_PREFIX
     SIMULATION_STOP_TTL = SIMULATION_STOP_TTL
+    PYRAMID_RESULT_PREFIX = PYRAMID_RESULT_PREFIX
+    PYRAMID_RESULT_TTL = PYRAMID_RESULT_TTL
+
+    @classmethod
+    def _pyramid_result_key(cls, session_id: str) -> str:
+        return f"{cls.PYRAMID_RESULT_PREFIX}{session_id}"
+
+    @classmethod
+    def read_pyramid_handoff_result(cls, session_id: str):
+        try:
+            raw = cls._redis().get(cls._pyramid_result_key(session_id))
+            if not raw:
+                return None
+            return json.loads(raw)
+        except Exception as e:
+            print(f"[SessionManager] Failed to read pyramid handoff for {session_id}: {e}")
+            return None
+
+    @classmethod
+    def clear_pyramid_handoff_result(cls, session_id: str) -> None:
+        try:
+            cls._redis().delete(cls._pyramid_result_key(session_id))
+        except Exception as e:
+            print(f"[SessionManager] Failed to clear pyramid handoff for {session_id}: {e}")
 
     @classmethod
     def _simulation_stop_key(cls, session_id: str) -> str:
@@ -441,6 +506,128 @@ class SessionManager:
             print(f"[SessionManager] Error cleaning up worker {session_id}: {e}")
         finally:
             cls._workers.pop(session_id, None)
+
+    @classmethod
+    def _pid_alive(cls, pid: int) -> bool:
+        try:
+            os.kill(pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+
+    @classmethod
+    def _get_redis_pid(cls, session_id: str) -> Optional[int]:
+        try:
+            pid_str = cls._redis().get(f"{cls.REDIS_KEY_PREFIX}{session_id}")
+            return int(pid_str) if pid_str else None
+        except Exception:
+            return None
+
+    @classmethod
+    def _wait_for_pid_exit(cls, pid: int, timeout: float = 90.0) -> bool:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if not cls._pid_alive(pid):
+                return True
+            time.sleep(0.5)
+        return not cls._pid_alive(pid)
+
+    @classmethod
+    def _reconcile_session_registry(cls, session_id: str) -> None:
+        """
+        Drop stale local/Redis worker entries.
+        Needed when stop-simulation runs on a different gunicorn worker than start.
+        """
+        worker = cls._workers.get(session_id)
+        redis_pid = cls._get_redis_pid(session_id)
+
+        if worker and not worker.is_alive():
+            print(f"[SessionManager] Reconcile: dead local worker for {session_id}")
+            cls._cleanup_worker(session_id)
+            worker = None
+
+        if worker and worker.is_alive():
+            local_pid = worker.process.pid
+            if redis_pid is None:
+                print(
+                    f"[SessionManager] Reconcile: local worker PID={local_pid} for {session_id} "
+                    "but Redis entry cleared (cross-worker stop) — cleaning up"
+                )
+                worker.stop_event.set()
+                worker.process.join(timeout=5)
+                if worker.is_alive():
+                    try:
+                        worker.process.terminate()
+                        worker.process.join(timeout=3)
+                    except Exception:
+                        pass
+                cls._cleanup_worker(session_id)
+            elif redis_pid != local_pid:
+                print(
+                    f"[SessionManager] Reconcile: PID mismatch local={local_pid} redis={redis_pid} "
+                    f"for {session_id} — cleaning up local registry"
+                )
+                cls._cleanup_worker(session_id)
+
+        redis_pid = cls._get_redis_pid(session_id)
+        if redis_pid is not None and not cls._pid_alive(redis_pid):
+            print(f"[SessionManager] Reconcile: Redis PID={redis_pid} for {session_id} is dead — clearing")
+            try:
+                cls._redis().delete(f"{cls.REDIS_KEY_PREFIX}{session_id}")
+            except Exception as e:
+                print(f"[SessionManager] Redis delete failed during reconcile: {e}")
+            cls._workers.pop(session_id, None)
+
+    @classmethod
+    def ensure_worker_stopped(cls, session_id: str, timeout: float = 90.0) -> bool:
+        """Block until no live worker remains for this session (local registry + Redis PID)."""
+        cls._reconcile_session_registry(session_id)
+
+        worker = cls._workers.get(session_id)
+        if worker and worker.is_alive():
+            print(f"[SessionManager] ensure_worker_stopped: signaling local worker {session_id}")
+            worker.stop_event.set()
+            worker.process.join(timeout=min(timeout, 60))
+            if worker.is_alive():
+                try:
+                    worker.process.terminate()
+                    worker.process.join(timeout=5)
+                except Exception:
+                    pass
+            cls._cleanup_worker(session_id)
+
+        redis_pid = cls._get_redis_pid(session_id)
+        if redis_pid and cls._pid_alive(redis_pid):
+            print(f"[SessionManager] ensure_worker_stopped: SIGTERM PID={redis_pid} for {session_id}")
+            try:
+                os.kill(redis_pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            if not cls._wait_for_pid_exit(redis_pid, timeout):
+                print(f"[SessionManager] ensure_worker_stopped: SIGKILL PID={redis_pid} for {session_id}")
+                try:
+                    os.kill(redis_pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                cls._wait_for_pid_exit(redis_pid, 10)
+
+        try:
+            cls._redis().delete(f"{cls.REDIS_KEY_PREFIX}{session_id}")
+        except Exception:
+            pass
+
+        cls._reconcile_session_registry(session_id)
+        redis_pid = cls._get_redis_pid(session_id)
+        still_running = session_id in cls._workers or (
+            redis_pid is not None and cls._pid_alive(redis_pid)
+        )
+        if still_running:
+            print(f"[SessionManager] ensure_worker_stopped: worker still alive for {session_id}")
+            return False
+        print(f"[SessionManager] ensure_worker_stopped: {session_id} is clear")
+        return True
     
     @classmethod
     def start_session(cls, session_id: str, session_doc: dict, trading_logs_collection):
@@ -448,6 +635,8 @@ class SessionManager:
         
         # Start monitor if not running
         cls._start_monitor()
+
+        cls._reconcile_session_registry(session_id)
         
         # Check if session already exists
         if session_id in cls._workers:
@@ -458,6 +647,11 @@ class SessionManager:
             else:
                 print(f"[SessionManager] Session already running: {session_id}")
                 raise RuntimeError(f"Session {session_id} is already running")
+
+        redis_pid = cls._get_redis_pid(session_id)
+        if redis_pid is not None and cls._pid_alive(redis_pid):
+            print(f"[SessionManager] Session already running (Redis PID={redis_pid}): {session_id}")
+            raise RuntimeError(f"Session {session_id} is already running")
         
         # Check worker limit
         active_workers = sum(1 for w in cls._workers.values() if w.is_alive())
@@ -496,17 +690,28 @@ class SessionManager:
         print(f"  Strategy: {strategy}")
         print(f"  Symbols: {symbols}")
         print(f"  Allocations: {allocations}")
-        
+
         time_frame = session_doc.get("time_frame", "5 minutes")
         candle = session_doc.get("candle", "5m")
         configuration_id = session_doc.get("configuration_id")
+        leverage_multiplier = session_doc.get("leverage_multiplier")
+        if leverage_multiplier is not None:
+            try:
+                leverage_multiplier = float(leverage_multiplier)
+                if leverage_multiplier <= 0:
+                    leverage_multiplier = None
+            except (TypeError, ValueError):
+                leverage_multiplier = None
+        if leverage_multiplier is not None:
+            print(f"  Leverage multiplier: {leverage_multiplier}")
         
         # Prepare broker config
         broker_config = {
             "api_key": session_doc["api_key"],
             "client_code": session_doc["client_code"],
             "password": session_doc["password"],
-            "broker_session": session_doc["broker_session"]
+            "broker_session": session_doc["broker_session"],
+            "free_cash": session_doc.get("free_cash"),
         }
         
         # Get MongoDB connection details
@@ -515,7 +720,7 @@ class SessionManager:
             "mongodb+srv://mintzy01ai_db_user:zTqQRkovgKbLXQdp@cluster0.cztcxpr.mongodb.net/?appName=Cluster0"
         )
         mongo_db_name = os.environ.get("MONGO_DB_NAME", "mintzy_plugin")
-        mongo_config_db_name = os.environ.get("MONGO_CONFIG_DB_NAME", mongo_db_name)
+        mongo_config_db_name = os.environ.get("MONGO_CONFIG_DB_NAME", "test")
         
         # Create stop event and health queue for this worker
         stop_event = mp.Event()
@@ -538,6 +743,7 @@ class SessionManager:
                 mongo_db_name,
                 configuration_id,
                 mongo_config_db_name,
+                leverage_multiplier,
             ),
             daemon=False  # Not daemon - we want proper cleanup
         )
@@ -634,8 +840,14 @@ class SessionManager:
                         proc.wait(timeout=60)
                         print(f"[SessionManager] Process {pid} gracefully band ho gaya")
                     except ImportError:
-                        print("[SessionManager] psutil not installed — waiting without process handle")
-                        time.sleep(5)
+                        print("[SessionManager] psutil not installed — polling PID until exit")
+                        if not cls._wait_for_pid_exit(pid, timeout=90):
+                            print(f"[SessionManager] PID={pid} still alive after 90s — SIGKILL")
+                            try:
+                                os.kill(pid, signal.SIGKILL)
+                            except ProcessLookupError:
+                                pass
+                            cls._wait_for_pid_exit(pid, timeout=10)
                     except Exception as wait_err:
                         if wait_err.__class__.__name__ == "TimeoutExpired":
                             print(f"[SessionManager] 60s baad bhi alive — SIGKILL bhej raha hoon...")
@@ -695,6 +907,11 @@ class SessionManager:
             return False
         stopped = cls.stop_session(session_id)
         cls._cleanup_worker(session_id)
+        if stopped:
+            fully_stopped = cls.ensure_worker_stopped(session_id, timeout=90)
+            if not fully_stopped:
+                print(f"[SessionManager] Simulation worker for {session_id} did not exit in time")
+                return False
         return stopped
     
     @classmethod

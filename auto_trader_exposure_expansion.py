@@ -38,8 +38,26 @@ DEFAULT_MONGO_CONFIG_DB_NAME = "test"
 # Rank-based pyramid multipliers (rank 1 = index 0, highest rank gets largest mult)
 PYR_MULTS = [1.40, 1.30, 1.20, 1.00, 1.00, 0.75, 0.75, 0.75, 0.75, 0.75]
 
-# 14:15 IST stop-lock — exit losers, continue with green symbols
-STOP_LOCK_TIME = dt_time(14, 15)
+# Nifty intraday leverage: use 4x of account free cash for pyramid allocation headroom
+PYRAMID_LEVERAGE_MULTIPLIER = float(os.environ.get("PYRAMID_LEVERAGE_MULTIPLIER", "4"))
+
+# # Min unrealized PnL vs allocated capital to count as profitable at pyramid stop (0.05%)
+# PYRAMID_PROFIT_THRESHOLD_PCT = float(os.environ.get("PYRAMID_PROFIT_THRESHOLD_PCT", "0.0005"))
+
+
+# Rank → min unrealized PnL as % of allocated capital (from rank table; values are % e.g. 0.0576 = 0.0576%)
+PYR_PROFIT_THRESHOLD_PCT = {
+    1: 0.0576,
+    2: 0.0638,
+    3: 0.0744,
+    4: 0.0893,
+    5: 0.0893,
+    6: 0.1190,
+    7: 0.1374,
+    8: 0.1374,
+    9: 0.1374,
+    10: 0.1374,
+}
 
 
 def pyramid_multiplier_for_rank(rank) -> Optional[float]:
@@ -53,6 +71,20 @@ def pyramid_multiplier_for_rank(rank) -> Optional[float]:
     if idx >= len(PYR_MULTS):
         return PYR_MULTS[-1]
     return PYR_MULTS[idx]
+
+
+def pyramid_profit_threshold_for_rank(rank, capital_allocated: float) -> Optional[float]:
+    """Min unrealized PnL (Rs) to count as profitable: capital × rank % of allocated."""
+    try:
+        rank_key = int(rank)
+    except (TypeError, ValueError):
+        return None
+    if rank_key < 1 or capital_allocated <= 0:
+        return None
+    pct = PYR_PROFIT_THRESHOLD_PCT.get(rank_key)
+    if pct is None:
+        pct = PYR_PROFIT_THRESHOLD_PCT[10]  # ranks 11+ use rank 7–10 bucket
+    return float(capital_allocated) * (pct / 100.0)
 
 
 # ==================== TIMING LOGGER ====================
@@ -509,6 +541,7 @@ class AutoTrader:
         self._last_executed_candle = None
         self.pred_client = prediction_client
         self.market_client = market_client
+        self.broker = broker
         self.alerts = alerts if alerts is not None else AlertManager()
         self.initial_capital = initial_capital
         self.current_capital = initial_capital
@@ -536,7 +569,10 @@ class AutoTrader:
         self.session = None
         self.broker_live_session = None
         self.broker_session_payload = None
+        self.session_free_cash = None
         self.configuration_id = None
+        self.leverage_multiplier = 1
+        self.simulation_logs = True
         # =============================================================
         # ====== CANDLE TIMESTAMP (for correct logging) ======
         self.current_cycle_ts = None
@@ -572,7 +608,6 @@ class AutoTrader:
         self.trade_history = []
         self.stop_event = threading.Event()
         self._exit_warning_sent = False
-        self._1415_stoplock_done = False
         self.positions_lock = threading.Lock()   #  ADD THIS LINE
         self._exited_symbols = set()  # Symbols manually exited Ã¢â‚¬â€ excluded from future cycles
 
@@ -1553,6 +1588,64 @@ class AutoTrader:
             return coll.database.client[config_db_name][name]
         return coll.database[name]
 
+    @staticmethod
+    def _coerce_leverage_multiplier(value, source: str = "") -> Optional[float]:
+        if value is None:
+            return None
+        try:
+            mult = float(value)
+            if mult > 0:
+                return mult
+            print(f"[LEVERAGE] Ignoring non-positive {source}: {value!r}")
+        except (TypeError, ValueError):
+            print(f"[LEVERAGE] Invalid {source}: {value!r}")
+        return None
+
+    def _leverage_from_config_doc(self, config_doc: dict) -> Optional[float]:
+        if not isinstance(config_doc, dict):
+            return None
+        for key in ("leverage_multiplier", "leverage", "pyramid_leverage_multiplier"):
+            val = self._coerce_leverage_multiplier(
+                config_doc.get(key), f"SavedTradingConfiguration.{key}"
+            )
+            if val is not None:
+                return val
+        root = self._normalize_configuration_root(config_doc)
+        for key in ("leverage_multiplier", "leverage", "pyramid_leverage_multiplier"):
+            val = self._coerce_leverage_multiplier(root.get(key), f"configuration.{key}")
+            if val is not None:
+                return val
+        return None
+
+    def _resolve_leverage_multiplier(self, config_doc=None, default: float = 1.0) -> float:
+        """
+        Resolve intraday leverage: session/request -> SavedTradingConfiguration -> default.
+        Pyramid shutdown uses default=1.0 when nothing else is configured.
+        """
+        val = self._coerce_leverage_multiplier(
+            getattr(self, "leverage_multiplier", None), "session"
+        )
+        if val is not None:
+            self.leverage_multiplier = val
+            return val
+
+        doc = config_doc
+        if doc is None:
+            configuration_id = getattr(self, "configuration_id", None)
+            if configuration_id:
+                doc = self._fetch_saved_trading_configuration(configuration_id)
+
+        if doc:
+            val = self._leverage_from_config_doc(doc)
+            if val is not None:
+                self.leverage_multiplier = val
+                print(f"[LEVERAGE] Using leverage_multiplier={val} from SavedTradingConfiguration")
+                return val
+
+        self.leverage_multiplier = float(default)
+        print(f"[LEVERAGE] Falling back to leverage_multiplier={default}")
+        return float(default)
+
     def _pyramid_lookup_filters(self, configuration_id: str):
         """Build Mongo queries for SavedTradingConfiguration lookup."""
         filters = []
@@ -1697,6 +1790,81 @@ class AutoTrader:
         updated_count: int,
         configuration_id: str,
     ) -> bool:
+        """Legacy single-list persist — prefer _persist_pyramid_merged_updates."""
+        return self._persist_pyramid_merged_updates(
+            config_doc=config_doc,
+            updated_by_symbol={
+                self._normalize_config_symbol(entry.get("symbol")): dict(entry)
+                for entry in (symbols_list or [])
+                if isinstance(entry, dict) and entry.get("symbol")
+            },
+            removed_active_symbols=set(),
+            active_symbols={
+                self._normalize_config_symbol(entry.get("symbol"))
+                for entry in (symbols_list or [])
+                if isinstance(entry, dict) and entry.get("symbol")
+            },
+            updated_count=updated_count,
+            configuration_id=configuration_id,
+        )
+
+    def _configuration_symbol_set_paths(self, config_doc: dict) -> list:
+        """All Mongo dot-paths for symbol arrays under configuration."""
+        paths = []
+        root = self._normalize_configuration_root(config_doc)
+        if isinstance(root.get("symbols"), list):
+            paths.append("configuration.symbols")
+
+        alphas = root.get("alphas")
+        if isinstance(alphas, dict) and isinstance(alphas.get("symbols"), list):
+            paths.append("configuration.alphas.symbols")
+        elif isinstance(alphas, list):
+            for idx, alpha in enumerate(alphas):
+                if isinstance(alpha, dict) and isinstance(alpha.get("symbols"), list):
+                    paths.append(f"configuration.alphas.{idx}.symbols")
+        return paths
+
+    def _merge_pyramid_symbol_list(
+        self,
+        original_list: list,
+        updated_by_symbol: dict,
+        removed_active_symbols: set,
+        active_symbols: set,
+    ) -> list:
+        """
+        Merge pyramid results into a full symbol list.
+        - Symbols not in this simulation run are preserved unchanged.
+        - Active sim symbols with losses are removed.
+        - Active sim winners get updated capital/rank fields.
+        """
+        active_set = {self._normalize_config_symbol(s) for s in (active_symbols or [])}
+        removed_set = {self._normalize_config_symbol(s) for s in (removed_active_symbols or [])}
+        result = []
+        for entry in original_list or []:
+            if not isinstance(entry, dict):
+                continue
+            sym_key = self._normalize_config_symbol(entry.get("symbol"))
+            if not sym_key:
+                continue
+            if sym_key in removed_set:
+                continue
+            if sym_key in updated_by_symbol:
+                merged = dict(entry)
+                merged.update(updated_by_symbol[sym_key])
+                result.append(merged)
+            else:
+                result.append(dict(entry))
+        return result
+
+    def _persist_pyramid_merged_updates(
+        self,
+        config_doc: dict,
+        updated_by_symbol: dict,
+        removed_active_symbols: set,
+        active_symbols: set,
+        updated_count: int,
+        configuration_id: str,
+    ) -> bool:
         config_coll = self._get_saved_trading_configuration_collection(
             getattr(self, "_pyramid_config_collection", None)
         )
@@ -1704,14 +1872,43 @@ class AutoTrader:
             print("[PYRAMID] Failed to persist — collection unavailable")
             return False
 
+        root = self._normalize_configuration_root(config_doc)
+        update_doc = {"pyramid_updated_at": datetime.now(timezone.utc)}
+        paths = self._configuration_symbol_set_paths(config_doc)
+        if not paths:
+            print("[PYRAMID] No symbol list paths found — aborting save")
+            return False
+
+        for set_path in paths:
+            parts = set_path.split(".")
+            node = root
+            for part in parts[1:]:
+                if not isinstance(node, dict):
+                    node = None
+                    break
+                node = node.get(part)
+            if not isinstance(node, list):
+                print(f"[PYRAMID] Skip persist path {set_path!r} — list missing")
+                continue
+            merged_list = self._merge_pyramid_symbol_list(
+                node,
+                updated_by_symbol,
+                removed_active_symbols,
+                active_symbols,
+            )
+            update_doc[set_path] = merged_list
+            print(
+                f"[PYRAMID] merge {set_path}: "
+                f"{len(node)} -> {len(merged_list)} symbol(s)"
+            )
+
+        if len(update_doc) <= 1:
+            print("[PYRAMID] Nothing to persist after merge")
+            return False
+
         config_db_name = config_coll.database.name
         coll_name = config_coll.name
         query = getattr(self, "_pyramid_config_filter", None) or {"_id": config_doc.get("_id")}
-        update_doc = {
-            set_path: symbols_list,
-            "pyramid_updated_at": datetime.now(timezone.utc),
-        }
-
         result = config_coll.update_one(query, {"$set": update_doc})
         print(
             f"[PYRAMID] Mongo save to {config_db_name}.{coll_name} "
@@ -1725,7 +1922,7 @@ class AutoTrader:
         if result.modified_count:
             print(
                 f"[PYRAMID] SavedTradingConfiguration updated "
-                f"({updated_count} profitable symbol(s) kept)"
+                f"({updated_count} profitable symbol(s) merged)"
             )
             if updated_count > 0:
                 self.alerts.notify(
@@ -2022,8 +2219,8 @@ class AutoTrader:
             print(f"[{context}] broker balance fetch failed: {type(exc).__name__}: {exc}")
         return None
 
-    def _get_pyramid_free_cash(self) -> float:
-        """Pyramid uses broker RMS cash; paper ledger is never the primary source."""
+    def _get_pyramid_free_cash(self) -> Optional[float]:
+        """Pyramid uses broker RMS cash, then session TOTP free_cash — never paper ledger."""
         broker_cash = self._fetch_broker_free_cash(context="PYRAMID")
         if broker_cash is not None:
             return broker_cash
@@ -2032,45 +2229,599 @@ class AutoTrader:
         if session_free is not None:
             try:
                 parsed = float(session_free)
-                print(f"[PYRAMID] using session_free_cash fallback: {parsed:,.2f}")
-                return parsed
+                if parsed >= 0:
+                    print(f"[PYRAMID] using session_free_cash fallback: {parsed:,.2f}")
+                    return parsed
             except (TypeError, ValueError):
                 pass
 
-        paper_cash = float(self.cash_balance)
-        print(f"[PYRAMID] WARNING: falling back to paper cash_balance: {paper_cash:,.2f}")
-        return paper_cash
+        print(
+            "[PYRAMID] ABORT — no broker RMS cash and no session_free_cash; "
+            "refusing paper cash_balance fallback"
+        )
+        return None
 
-    def _apply_capital_pyramid_on_stop(self) -> None:
+    @staticmethod
+    def _build_pyramid_handoff_result(
+        *,
+        applied: bool,
+        live_allowed: bool,
+        reason: str,
+        profitable_count: int = 0,
+        symbols_for_live=None,
+        removed_symbols=None,
+    ) -> dict:
+        return {
+            "applied": applied,
+            "live_allowed": live_allowed,
+            "reason": reason,
+            "profitable_count": profitable_count,
+            "symbols_for_live": symbols_for_live or [],
+            "removed_symbols": removed_symbols or [],
+        }
+
+    def _persist_pyramid_pnls(self, symbols: list, applied: bool = False, reason: str = None) -> None:
+        sid = getattr(self, "ui_session_id", None) or getattr(self, "session_id", None)
+        base = self.trading_logs_collection
+        if not sid or base is None:
+            return
+        db_name = self._resolve_config_db_name()
+        coll = (
+            base.database.client[db_name]["pyramid_pnls"]
+            if db_name != base.database.name
+            else base.database["pyramid_pnls"]
+        )
+        try:
+            coll.replace_one(
+                {"session_id": str(sid)},
+                {
+                    "session_id": str(sid),
+                    "configuration_id": getattr(self, "configuration_id", None),
+                    "recorded_at": datetime.now(timezone.utc).isoformat(),
+                    "pyramid_applied": applied,
+                    "reason": reason,
+                    "symbols": symbols,
+                },
+                upsert=True,
+            )
+        except Exception as exc:
+            print(f"[PYRAMID-PNL] persist failed: {exc}")
+
+    def _finish_pyramid_handoff(self, result: dict, pnl_rows: list) -> dict:
+        self._persist_pyramid_pnls(pnl_rows, applied=bool(result.get("applied")), reason=result.get("reason"))
+        return result
+
+    def _symbols_for_live_from_entries(self, updated_by_symbol: dict) -> list:
+        rows = []
+        allocations = getattr(self, "symbol_allocations", {}) or {}
+        for sym_key, entry in updated_by_symbol.items():
+            stop_loss = entry.get("stop_loss")
+            if stop_loss is None:
+                stop_loss = (allocations.get(sym_key) or {}).get("stop_loss", 0.05)
+            rows.append(
+                {
+                    "symbol": sym_key,
+                    "capital": float(entry.get("capital") or 0),
+                    "stop_loss": float(stop_loss or 0.05),
+                }
+            )
+        return [row for row in rows if row["symbol"] and row["capital"] > 0]
+
+    # ===== PYRAMID CYCLE LOGS + AVG_PRICE PROFITABILITY (disabled) =====
+#    def _resolve_pyramid_session_id(self) -> Optional[str]:
+#        for attr in ("ui_session_id", "session_id"):
+#            sid = getattr(self, attr, None)
+#            if sid:
+#                return str(sid).strip()
+#        return None
+    #
+#    @staticmethod
+#    def _normalize_trading_log_row(doc: dict) -> Optional[dict]:
+#        if not isinstance(doc, dict):
+#            return None
+    #
+#        sym = AutoTrader._normalize_config_symbol(doc.get("symbol"))
+#        if not sym:
+#            return None
+    #
+#        try:
+#            cycle = int(doc.get("cycle"))
+#        except (TypeError, ValueError):
+#            return None
+#        if cycle <= 0:
+#            return None
+    #
+#        def _num(key, default=0.0, as_int=False):
+#            raw = doc.get(key)
+#            if raw is None:
+#                return default
+#            try:
+#                return int(raw) if as_int else float(raw)
+#            except (TypeError, ValueError):
+#                return default
+    #
+#        ts = doc.get("timestamp")
+#        if ts is not None and not isinstance(ts, str):
+#            ts = str(ts)
+    #
+#        return {
+#            "session_id": doc.get("session_id"),
+#            "cycle": cycle,
+#            "timestamp": ts or "",
+#            "symbol": sym,
+#            "curr_price": _num("curr_price"),
+#            "return_pct": _num("return_pct"),
+#            "side": (doc.get("side") or "NONE").upper(),
+#            "signal": doc.get("signal") or "",
+#            "action": (doc.get("action") or "").strip(),
+#            "qty": _num("qty", default=0, as_int=True),
+#            "unrealized_pnl": _num("unrealized_pnl"),
+#            "symbol_unrealized_pnl": _num("symbol_unrealized_pnl"),
+#            "symbol_realized_pnl": _num("symbol_realized_pnl"),
+#            "symbol_pnl": _num("symbol_pnl"),
+#            "cash_balance": _num("cash_balance"),
+#            "realized_pnl": _num("realized_pnl"),
+#            "total_equity": _num("total_equity"),
+#            "_id": str(doc.get("_id")) if doc.get("_id") is not None else "",
+#        }
+    #
+#    @staticmethod
+#    def _trading_log_row_is_newer(candidate: dict, incumbent: dict) -> bool:
+#        """True if candidate should replace incumbent for the same symbol+cycle."""
+#        cand_ts = candidate.get("timestamp") or ""
+#        inc_ts = incumbent.get("timestamp") or ""
+#        if cand_ts != inc_ts:
+#            return cand_ts > inc_ts
+    #
+#        cand_id = candidate.get("_id") or ""
+#        inc_id = incumbent.get("_id") or ""
+#        return cand_id > inc_id
+    #
+#    def _fetch_executed_symbol_cycle_logs(self, symbols=None) -> dict:
+#        """
+#        Load every trading_logs row for this session up to stop/pyramid time,
+#        grouped by symbol. Includes cycle 1, 2, 3, ... however many ran.
+    #
+#        Returns:
+#            {
+#              "ok": bool,
+#              "session_id": str | None,
+#              "reason": str | None,
+#              "cycles_executed": [1, 2, 3, ...],   # union across all symbols
+#              "cycle_count": int,                    # len(cycles_executed)
+#              "symbols": {
+#                "AXISBANK": {
+#                  "cycles": [1, 2, 3],               # cycle numbers ascending
+#                  "all": [{cycle 1 row}, {cycle 2 row}, ...],  # ordered history
+#                  "by_cycle": {1: {...}, 2: {...}, 3: {...}},
+#                  "cycle_count": 3,
+#                  "first_cycle": 1,
+#                  "last_cycle": 3,
+#                  "first": {...},
+#                  "last": {...},
+#                },
+#              },
+#              "row_count": int,
+#            }
+    #
+#        Use `all` or `by_cycle` when you need every executed cycle (not just first/last).
+#        If only one cycle ran, all == [first] == [last].
+#        """
+#        empty = {
+#            "ok": False,
+#            "session_id": None,
+#            "reason": None,
+#            "cycles_executed": [],
+#            "cycle_count": 0,
+#            "symbols": {},
+#            "row_count": 0,
+#        }
+    #
+#        coll = getattr(self, "trading_logs_collection", None)
+#        session_id = self._resolve_pyramid_session_id()
+#        if coll is None:
+#            empty["reason"] = "trading_logs_unavailable"
+#            print("[PYRAMID-LOGS] trading_logs_collection is None — cannot fetch cycles")
+#            return empty
+#        if not session_id:
+#            empty["reason"] = "session_id_missing"
+#            print("[PYRAMID-LOGS] session_id missing — cannot fetch cycles")
+#            return empty
+    #
+#        requested_symbols = []
+#        if symbols:
+#            seen = set()
+#            for sym in symbols:
+#                sym_key = self._normalize_config_symbol(sym)
+#                if sym_key and sym_key not in seen:
+#                    seen.add(sym_key)
+#                    requested_symbols.append(sym_key)
+    #
+#        result = {
+#            "ok": True,
+#            "session_id": session_id,
+#            "reason": None,
+#            "cycles_executed": [],
+#            "cycle_count": 0,
+#            "symbols": {},
+#            "row_count": 0,
+#        }
+    #
+#        if requested_symbols:
+#            for sym_key in requested_symbols:
+#                result["symbols"][sym_key] = {
+#                    "cycles": [],
+#                    "all": [],
+#                    "by_cycle": {},
+#                    "cycle_count": 0,
+#                    "first_cycle": None,
+#                    "last_cycle": None,
+#                    "first": None,
+#                    "last": None,
+#                }
+    #
+#        by_symbol_cycle: dict = {}
+#        global_cycles = set()
+    #
+#        try:
+#            cursor = coll.find({"session_id": session_id}).sort([
+#                ("cycle", 1),
+#                ("timestamp", 1),
+#                ("symbol", 1),
+#            ])
+#            for raw in cursor:
+#                row = self._normalize_trading_log_row(raw)
+#                if not row:
+#                    continue
+    #
+#                sym_key = row["symbol"]
+#                cycle = row["cycle"]
+    #
+#                if requested_symbols and sym_key not in result["symbols"]:
+#                    continue
+    #
+#                result["row_count"] += 1
+#                global_cycles.add(cycle)
+    #
+#                bucket = by_symbol_cycle.setdefault(sym_key, {})
+#                existing = bucket.get(cycle)
+#                if existing is None or self._trading_log_row_is_newer(row, existing):
+#                    bucket[cycle] = row
+    #
+#        except Exception as exc:
+#            print(f"[PYRAMID-LOGS] Mongo fetch failed for session={session_id}: {exc}")
+#            empty["session_id"] = session_id
+#            empty["reason"] = f"mongo_fetch_failed:{type(exc).__name__}"
+#            return empty
+    #
+#        if not by_symbol_cycle and not requested_symbols:
+#            print(f"[PYRAMID-LOGS] no trading_logs rows for session={session_id}")
+#            return result
+    #
+#        symbol_keys = requested_symbols or sorted(by_symbol_cycle.keys())
+#        for sym_key in symbol_keys:
+#            cycle_map = by_symbol_cycle.get(sym_key, {})
+#            cycles = sorted(cycle_map.keys())
+#            by_cycle = {c: cycle_map[c] for c in cycles}
+#            all_rows = [by_cycle[c] for c in cycles]
+#            first_cycle = cycles[0] if cycles else None
+#            last_cycle = cycles[-1] if cycles else None
+    #
+#            result["symbols"][sym_key] = {
+#                "cycles": cycles,
+#                "all": all_rows,
+#                "by_cycle": by_cycle,
+#                "cycle_count": len(cycles),
+#                "first_cycle": first_cycle,
+#                "last_cycle": last_cycle,
+#                "first": all_rows[0] if all_rows else None,
+#                "last": all_rows[-1] if all_rows else None,
+#            }
+    #
+#        result["cycles_executed"] = sorted(global_cycles)
+#        result["cycle_count"] = len(result["cycles_executed"])
+    #
+#        print(
+#            f"[PYRAMID-LOGS] session={session_id} rows={result['row_count']} "
+#            f"cycles={result['cycles_executed']} (count={result['cycle_count']}) "
+#            f"symbols={list(result['symbols'].keys())}"
+#        )
+#        for sym_key, sym_data in result["symbols"].items():
+#            cycle_summary = [
+#                {
+#                    "cycle": row.get("cycle"),
+#                    "timestamp": row.get("timestamp"),
+#                    "action": row.get("action"),
+#                    "qty": row.get("qty"),
+#                    "curr_price": row.get("curr_price"),
+#                }
+#                for row in sym_data.get("all") or []
+#            ]
+#            print(f"[PYRAMID-LOGS]   {sym_key} ({sym_data.get('cycle_count', 0)} cycles): {cycle_summary}")
+    #
+#        return result
+    #
+#    @staticmethod
+#    def _classify_pyramid_log_action(action: str) -> str:
+#        text = (action or "").strip().upper()
+#        if not text:
+#            return "UNKNOWN"
+#        if "WAIT" in text and "NO POSITION" in text:
+#            return "WAIT"
+#        if "PENDING" in text and "ORDER" in text:
+#            return "PENDING"
+#        if "HOLD" in text and "CONTINUE" in text:
+#            return "HOLD"
+#        if "HOLD" in text and "FLAT" in text:
+#            return "WAIT"
+#        if "STOP-LOSS" in text or "CLOSED" in text or "COVERED" in text:
+#            return "EXIT"
+#        if "OPEN LONG" in text or "OPEN SHORT" in text:
+#            return "PENDING"
+#        return "OTHER"
+    #
+#    @staticmethod
+#    def _is_pyramid_flip_between_cycles(c1: dict, c2: dict) -> bool:
+#        sig2 = (c2.get("signal") or "").upper()
+#        act2 = (c2.get("action") or "").upper()
+#        if "FLIP" in sig2 or "FLIP" in act2:
+#            return True
+    #
+#        s1 = (c1.get("side") or "NONE").upper()
+#        s2 = (c2.get("side") or "NONE").upper()
+#        if s1 in ("BUY", "SELL") and s2 in ("BUY", "SELL") and s1 != s2:
+#            return True
+    #
+#        if s1 == "BUY" and ("FLIP TO SHORT" in sig2 or ("SELL" in sig2 and "FLIP" in sig2)):
+#            return True
+#        if s1 == "SELL" and ("FLIP TO LONG" in sig2 or ("BUY" in sig2 and "FLIP" in sig2)):
+#            return True
+    #
+#        q1 = int(c1.get("qty") or 0)
+#        q2 = int(c2.get("qty") or 0)
+#        if q1 > 0 and q2 >= max(q1 * 2 - 1, q1 + 1):
+#            sig1 = (c1.get("signal") or "").upper()
+#            if s1 == "BUY" and "SELL" in sig2:
+#                return True
+#            if s1 == "SELL" and "BUY" in sig2:
+#                return True
+#            if "FLIP" in sig2:
+#                return True
+#            if s1 != s2:
+#                return True
+#            _ = sig1
+#        return False
+    #
+#    @staticmethod
+#    def _is_pyramid_expansion_between_cycles(c1: dict, c2: dict) -> bool:
+#        sig2 = (c2.get("signal") or "").upper()
+#        if "EXPANSION" in sig2 or "EXPAND" in sig2:
+#            return True
+    #
+#        s1 = (c1.get("side") or "NONE").upper()
+#        s2 = (c2.get("side") or "NONE").upper()
+#        q1 = int(c1.get("qty") or 0)
+#        q2 = int(c2.get("qty") or 0)
+    #
+#        if s1 in ("BUY", "SELL") and s1 == s2 and q2 > q1 > 0:
+#            return True
+#        if q2 > q1 > 0 and s2 in ("BUY", "SELL") and s2 == s1:
+#            return True
+    #
+#        sig1 = (c1.get("signal") or "").upper()
+#        if q2 > q1 > 0:
+#            if "BUY" in sig1 and "BUY" in sig2 and ("EXPAND" in sig2 or "EXPANSION" in sig2):
+#                return True
+#            if "SELL" in sig1 and "SELL" in sig2 and ("EXPAND" in sig2 or "EXPANSION" in sig2):
+#                return True
+#        return False
+    #
+#    def _compute_pyramid_avg_price(self, c1: Optional[dict], c2: Optional[dict], sym_key: str) -> tuple:
+#        if not c1 and not c2:
+#            return 0.0, "no_logs"
+#        if c1 and not c2:
+#            c2 = c1
+#        if not c1 and c2:
+#            c1 = c2
+    #
+#        b1 = self._classify_pyramid_log_action(c1.get("action"))
+#        b2 = self._classify_pyramid_log_action(c2.get("action"))
+#        p1 = float(c1.get("curr_price") or 0)
+#        p2 = float(c2.get("curr_price") or 0)
+    #
+#        if b1 == "WAIT" and b2 == "WAIT":
+#            return 0.0, "wait+wait"
+#        if b1 == "WAIT" and b2 == "PENDING":
+#            return p2, "wait+pending"
+#        if b1 == "WAIT" and b2 == "HOLD":
+#            return p2, "wait+hold"
+#        if b1 == "PENDING" and b2 == "HOLD":
+#            return p2, "pending+hold"
+#        if b1 == "PENDING" and b2 == "PENDING":
+#            if self._is_pyramid_expansion_between_cycles(c1, c2):
+#                if p1 > 0 and p2 > 0:
+#                    return (p1 + p2) / 2.0, "pending+pending+expand"
+#                return p2, "pending+pending+expand"
+#            if self._is_pyramid_flip_between_cycles(c1, c2):
+#                return p2, "pending+pending+flip"
+#            return p2, "pending+pending"
+#        if b2 in ("WAIT", "EXIT"):
+#            return 0.0, f"{b1.lower()}+{b2.lower()}"
+#        if b1 == "HOLD" and b2 == "HOLD":
+#            with self.positions_lock:
+#                pos = self.positions.get(sym_key)
+#            if pos:
+#                entry_price = float(pos.get("entry_price") or 0)
+#                if entry_price > 0:
+#                    return entry_price, "hold+hold+entry"
+#            if p1 > 0:
+#                return p1, "hold+hold+c1"
+#            return p2, "hold+hold+c2"
+#        if b1 == "HOLD" and b2 == "PENDING":
+#            if self._is_pyramid_expansion_between_cycles(c1, c2):
+#                if p1 > 0 and p2 > 0:
+#                    return (p1 + p2) / 2.0, "hold+pending+expand"
+#            if self._is_pyramid_flip_between_cycles(c1, c2):
+#                return p2, "hold+pending+flip"
+#            return p2, "hold+pending"
+#        if b2 in ("HOLD", "PENDING") and p2 > 0:
+#            return p2, f"{b1.lower()}+{b2.lower()}"
+#        if p1 > 0:
+#            return p1, "fallback_c1"
+#        return 0.0, "fallback_zero"
+    #
+#    def _resolve_pyramid_position_qty(self, sym_key: str, last_row: Optional[dict]) -> int:
+#        bucket = self._classify_pyramid_log_action((last_row or {}).get("action"))
+#        if bucket in ("WAIT", "EXIT"):
+#            return 0
+    #
+#        log_qty = int((last_row or {}).get("qty") or 0)
+#        if log_qty > 0:
+#            return log_qty
+#        return self._get_symbol_position_qty(sym_key)
+    #
+#    def _resolve_pyramid_position_side(self, sym_key: str, last_row: Optional[dict]) -> str:
+#        side = ((last_row or {}).get("side") or "NONE").upper()
+#        if side in ("BUY", "SELL"):
+#            return side
+    #
+#        with self.positions_lock:
+#            pos = self.positions.get(sym_key)
+#            if pos:
+#                pos_side = (pos.get("side") or "NONE").upper()
+#                if pos_side in ("BUY", "SELL"):
+#                    return pos_side
+    #
+#        with self._paper_lock:
+#            pos = self._paper_positions.get(sym_key)
+#            if pos:
+#                pos_side = (pos.get("side") or "NONE").upper()
+#                if pos_side in ("BUY", "SELL"):
+#                    return pos_side
+#        return "NONE"
+    #
+#    @staticmethod
+#    def _compute_pyramid_unrealized_pnl(avg_price: float, qty: int, side: str, mark_price: float) -> float:
+#        if avg_price <= 0 or qty <= 0 or mark_price <= 0:
+#            return 0.0
+#        if side == "BUY":
+#            return round((mark_price - avg_price) * qty, 2)
+#        if side == "SELL":
+#            return round((avg_price - mark_price) * qty, 2)
+#        return 0.0
+    #
+#    def _evaluate_pyramid_symbol_profitability(self, sym_key: str, sym_log_data: dict) -> dict:
+#        c_first = sym_log_data.get("first")
+#        c_last = sym_log_data.get("last")
+    #
+#        avg_price, case = self._compute_pyramid_avg_price(c_first, c_last, sym_key)
+#        qty = self._resolve_pyramid_position_qty(sym_key, c_last)
+#        side = self._resolve_pyramid_position_side(sym_key, c_last)
+#        mark_price = float((c_last or {}).get("curr_price") or 0)
+    #
+#        capital_allocated = avg_price * qty if avg_price > 0 and qty > 0 else 0.0
+#        threshold = capital_allocated * PYRAMID_PROFIT_THRESHOLD_PCT
+#        unrealized_pnl = self._compute_pyramid_unrealized_pnl(avg_price, qty, side, mark_price)
+    #
+#        if unrealized_pnl == 0 and c_last:
+#            bucket = self._classify_pyramid_log_action(c_last.get("action"))
+#            if bucket in ("HOLD", "PENDING"):
+#                log_unrealized = float(
+#                    c_last.get("symbol_unrealized_pnl")
+#                    or c_last.get("unrealized_pnl")
+#                    or 0
+#                )
+#                if log_unrealized != 0:
+#                    unrealized_pnl = log_unrealized
+    #
+#        is_profitable = capital_allocated > 0 and unrealized_pnl > threshold
+#        return {
+#            "avg_price": avg_price,
+#            "qty": qty,
+#            "side": side,
+#            "mark_price": mark_price,
+#            "capital_allocated": capital_allocated,
+#            "threshold": threshold,
+#            "unrealized_pnl": unrealized_pnl,
+#            "is_profitable": is_profitable,
+#            "case": case,
+#            "first_cycle": (c_first or {}).get("cycle"),
+#            "last_cycle": (c_last or {}).get("cycle"),
+#            "first_action": (c_first or {}).get("action"),
+#            "last_action": (c_last or {}).get("action"),
+#        }
+    #
+    # ===== END PYRAMID CYCLE LOGS (disabled) =====
+    def _apply_capital_pyramid_on_stop(self) -> dict:
         if getattr(self, "_pyramid_applied", False):
             print("[PYRAMID] Already applied — skipping duplicate stop")
-            return
+            cached = getattr(self, "_pyramid_handoff_result", None)
+            if cached:
+                return cached
+            return self._build_pyramid_handoff_result(
+                applied=True,
+                live_allowed=True,
+                reason="already_applied",
+            )
 
         configuration_id = getattr(self, "configuration_id", None)
         if not configuration_id:
             print("[PYRAMID] configuration_id missing — skipping capital pyramid update")
-            return
+            return self._build_pyramid_handoff_result(
+                applied=False,
+                live_allowed=True,
+                reason="configuration_id_missing",
+            )
 
         config_doc = self._fetch_saved_trading_configuration(configuration_id)
         if not config_doc:
-            return
+            return self._build_pyramid_handoff_result(
+                applied=False,
+                live_allowed=True,
+                reason="configuration_not_found",
+            )
 
         symbols_list, set_path = self._get_configuration_symbols_ref(config_doc)
         if symbols_list is None or set_path is None:
             print(f"[PYRAMID] configuration symbols not found for {configuration_id}")
-            return
+            return self._build_pyramid_handoff_result(
+                applied=False,
+                live_allowed=True,
+                reason="configuration_symbols_missing",
+            )
 
         rank_map = self._build_configuration_rank_map(config_doc)
         config_entries = self._build_pyramid_config_entries(config_doc, symbols_list, rank_map)
         if not config_entries:
             print("[PYRAMID] No symbols with capital to evaluate — aborting update")
-            return
+            return self._build_pyramid_handoff_result(
+                applied=False,
+                live_allowed=True,
+                reason="no_symbols_to_evaluate",
+            )
 
+        # pyramid_symbol_keys = [sym_key for sym_key, _, _ in config_entries]
+        # self._pyramid_cycle_logs = self._fetch_executed_symbol_cycle_logs(symbols=pyramid_symbol_keys)
+
+        active_symbols = self._get_pyramid_active_symbol_keys()
         total_capital_allocated = sum(cap for _, _, cap in config_entries)
-        free_cash = float(self._get_pyramid_free_cash())
+        free_cash = self._get_pyramid_free_cash()
+        if free_cash is None:
+            print("[PYRAMID] Skipping capital pyramid — real broker/session cash unavailable")
+            return self._build_pyramid_handoff_result(
+                applied=False,
+                live_allowed=True,
+                reason="broker_cash_unavailable",
+            )
+
+        raw_free_cash = float(free_cash)
+        leverage_mult = self._resolve_leverage_multiplier(config_doc=config_doc, default=1.0)
+        free_cash = raw_free_cash * leverage_mult
         remaining_cash = free_cash - total_capital_allocated
         print(
-            f"[PYRAMID] free_cash={free_cash:.2f} "
+            f"[PYRAMID] raw_free_cash={raw_free_cash:.2f} "
+            f"leverage=x{leverage_mult} "
+            f"effective_free_cash={free_cash:.2f} "
             f"total_capital_allocated={total_capital_allocated:.2f} "
             f"remaining_cash={remaining_cash:.2f} "
             f"evaluated_symbols={[sym for sym, _, _ in config_entries]}"
@@ -2078,28 +2829,95 @@ class AutoTrader:
 
         profitable = []
         removed = []
+        removed_keys = set()
+        pnl_rows = []
         for sym_key, entry, cap in config_entries:
             unrealized = self._get_symbol_unrealized_pnl(sym_key)
-            if unrealized > 0:
+            rank = entry.get("rank")
+            if rank is None:
+                rank = rank_map.get(sym_key)
+            threshold = pyramid_profit_threshold_for_rank(rank, cap)
+            row = {
+                "symbol": sym_key,
+                "rank": rank,
+                "capital_allocated": round(cap, 2),
+                "unrealized_pnl": round(unrealized, 2),
+                "profit_threshold": round(threshold, 2) if threshold is not None else None,
+                "is_profitable": False,
+            }
+            if threshold is None:
+                removed.append(f"{sym_key}(rank={rank!r}, missing threshold)")
+                removed_keys.add(sym_key)
+                pnl_rows.append(row)
+                continue
+            pct = PYR_PROFIT_THRESHOLD_PCT.get(int(rank), PYR_PROFIT_THRESHOLD_PCT[10])
+            print(
+                f"[PYRAMID-PROFIT] {sym_key}: rank={rank} capital={cap:.2f} "
+                f"pct={pct}% threshold={threshold:.2f} unrealized={unrealized:.2f}"
+            )
+            row["is_profitable"] = unrealized > threshold
+            pnl_rows.append(row)
+            if unrealized > threshold:
                 profitable.append((sym_key, entry, cap, unrealized))
             else:
-                removed.append(f"{sym_key}(unrealized={unrealized:.2f})")
+                removed.append(
+                    f"{sym_key}(rank={rank}, unrealized={unrealized:.2f}, threshold={threshold:.2f})"
+                )
+                removed_keys.add(sym_key)
 
         if removed:
             print(f"[PYRAMID] Removing non-profitable symbols: {', '.join(removed)}")
 
         if not profitable:
-            print("[PYRAMID] No symbols with unrealized_pnl > 0 — saving empty symbol list")
-            saved = self._persist_saved_configuration_symbols(
-                config_doc=config_doc,
-                symbols_list=[],
-                set_path=set_path,
-                updated_count=0,
-                configuration_id=configuration_id,
+            print(
+                "[PYRAMID] No symbols passed rank-based profit threshold — "
+                "skipping Mongo update (master config preserved)"
             )
-            if saved:
-                self._pyramid_applied = True
-            return
+            return self._finish_pyramid_handoff(
+                self._build_pyramid_handoff_result(
+                    applied=False,
+                    live_allowed=False,
+                    reason="no_profitable_symbols",
+                    removed_symbols=[item.split("(")[0] for item in removed],
+                ),
+                pnl_rows,
+            )
+
+        # --- pyramid cycle-log profitability (disabled) ---
+        # profitable = []
+        # removed = []
+        # removed_keys = set()
+        # for sym_key, entry, cap in config_entries:
+        #     sym_log_data = self._pyramid_cycle_logs.get("symbols", {}).get(sym_key, {})
+        #     metrics = self._evaluate_pyramid_symbol_profitability(sym_key, sym_log_data)
+        #     print(
+        #         f"[PYRAMID-CASE] {sym_key}: case={metrics['case']} "
+        #         f"cycles={metrics['first_cycle']}->{metrics['last_cycle']} "
+        #         f"actions=({metrics['first_action']!r} -> {metrics['last_action']!r}) "
+        #         f"avg={metrics['avg_price']:.2f} qty={metrics['qty']} side={metrics['side']} "
+        #         f"mark={metrics['mark_price']:.2f} capital={metrics['capital_allocated']:.2f} "
+        #         f"unrealized={metrics['unrealized_pnl']:.2f} "
+        #         f"threshold={metrics['threshold']:.4f} ({PYRAMID_PROFIT_THRESHOLD_PCT * 100:.3f}%) "
+        #         f"profitable={metrics['is_profitable']}"
+        #     )
+        #     if metrics["is_profitable"]:
+        #         profitable.append((sym_key, entry, cap, metrics["unrealized_pnl"]))
+        #     else:
+        #         removed.append(
+        #             f"{sym_key}(case={metrics['case']}, unrealized={metrics['unrealized_pnl']:.2f}, "
+        #             f"threshold={metrics['threshold']:.4f})"
+        #         )
+        #         removed_keys.add(sym_key)
+        #
+        # if removed:
+        #     print(f"[PYRAMID] Removing non-profitable symbols: {', '.join(removed)}")
+        #
+        # if not profitable:
+        #     print(
+        #         f"[PYRAMID] No symbols with unrealized_pnl > "
+        #         f"{PYRAMID_PROFIT_THRESHOLD_PCT * 100:.3f}% of allocated capital — "
+        #         "skipping Mongo update (master config preserved)"
+        #     )
 
         profitable_static = []
         for sym_key, entry, current_capital, unrealized in profitable:
@@ -2120,12 +2938,27 @@ class AutoTrader:
 
         if not profitable_static:
             print("[PYRAMID] No profitable symbols with valid rank — aborting update")
-            return
+            return self._finish_pyramid_handoff(
+                self._build_pyramid_handoff_result(
+                    applied=False,
+                    live_allowed=False,
+                    reason="no_profitable_with_valid_rank",
+                    removed_symbols=[item.split("(")[0] for item in removed],
+                ),
+                pnl_rows,
+            )
 
         capital_after_static_sum = sum(item[5] for item in profitable_static)
         if capital_after_static_sum <= 0:
             print("[PYRAMID] Sum of capital after static multiplier <= 0 — aborting")
-            return
+            return self._finish_pyramid_handoff(
+                self._build_pyramid_handoff_result(
+                    applied=False,
+                    live_allowed=False,
+                    reason="capital_after_static_non_positive",
+                ),
+                pnl_rows,
+            )
 
         dynamic_multiplier = remaining_cash / capital_after_static_sum
         print(
@@ -2134,9 +2967,16 @@ class AutoTrader:
         )
         if dynamic_multiplier <= 0:
             print(f"[PYRAMID] dynamic_multiplier <= 0 ({dynamic_multiplier:.4f}) — aborting update")
-            return
+            return self._finish_pyramid_handoff(
+                self._build_pyramid_handoff_result(
+                    applied=False,
+                    live_allowed=False,
+                    reason="dynamic_multiplier_non_positive",
+                ),
+                pnl_rows,
+            )
 
-        new_symbols_list = []
+        updated_by_symbol = {}
         for (
             sym_key,
             entry,
@@ -2150,7 +2990,7 @@ class AutoTrader:
             new_entry = dict(entry)
             new_entry["capital"] = new_capital
             new_entry["rank"] = rank
-            new_symbols_list.append(new_entry)
+            updated_by_symbol[sym_key] = new_entry
             print(
                 f"[PYRAMID] {sym_key}: rank={rank} capital "
                 f"{current_capital:.2f} -> {new_capital:.2f} "
@@ -2160,67 +3000,52 @@ class AutoTrader:
                 f"unrealized={unrealized:.2f})"
             )
 
-        if not new_symbols_list:
+        if not updated_by_symbol:
             print("[PYRAMID] No profitable symbols with valid rank — aborting update")
-            return
+            return self._finish_pyramid_handoff(
+                self._build_pyramid_handoff_result(
+                    applied=False,
+                    live_allowed=False,
+                    reason="no_symbols_updated",
+                ),
+                pnl_rows,
+            )
 
-        saved = self._persist_saved_configuration_symbols(
+        saved = self._persist_pyramid_merged_updates(
             config_doc=config_doc,
-            symbols_list=new_symbols_list,
-            set_path=set_path,
-            updated_count=len(new_symbols_list),
+            updated_by_symbol=updated_by_symbol,
+            removed_active_symbols=removed_keys,
+            active_symbols=active_symbols,
+            updated_count=len(updated_by_symbol),
             configuration_id=configuration_id,
         )
+        symbols_for_live = self._symbols_for_live_from_entries(updated_by_symbol)
         if saved:
             self._pyramid_applied = True
+            result = self._finish_pyramid_handoff(
+                self._build_pyramid_handoff_result(
+                    applied=True,
+                    live_allowed=len(symbols_for_live) > 0,
+                    reason="ok" if symbols_for_live else "no_symbols_for_live",
+                    profitable_count=len(symbols_for_live),
+                    symbols_for_live=symbols_for_live,
+                    removed_symbols=sorted(removed_keys),
+                ),
+                pnl_rows,
+            )
+            self._pyramid_handoff_result_cache = result
+            return result
 
-    def _run_1415_stoplock_exits(self, active_symbols: list) -> None:
-        """At 14:15 IST exit open symbols with unrealized_pnl < 0; continue with the rest."""
-        now = self._now_market_time()
-        print(f"[1415-STOPLOCK] Check at {now.strftime('%Y-%m-%d %H:%M:%S')} IST")
-
-        symbols_to_check = {
-            self._normalize_config_symbol(s) for s in (active_symbols or []) if s
-        }
-
-        with self.broker_pos_lock:
-            self._broker_positions_cache = self._get_broker_positions()
-            for pos in self._broker_positions_cache or []:
-                sym = self._normalize_config_symbol(pos.get("symbol"))
-                if sym:
-                    symbols_to_check.add(sym)
-
-        exited = []
-        continuing = []
-        for sym_key in sorted(symbols_to_check):
-            if sym_key in self._exited_symbols:
-                continue
-
-            qty = self._get_symbol_position_qty(sym_key)
-            if qty == 0:
-                continuing.append(f"{sym_key}(flat)")
-                continue
-
-            unrealized = self._get_symbol_unrealized_pnl(sym_key)
-            if unrealized < 0:
-                print(f"[1415-STOPLOCK] {sym_key} unrealized={unrealized:.2f} — placing exit")
-                result = self.exit_single_position(sym_key)
-                if result.get("success"):
-                    exited.append(sym_key)
-                else:
-                    print(
-                        f"[1415-STOPLOCK] {sym_key} exit failed: "
-                        f"{result.get('message', 'unknown error')}"
-                    )
-            else:
-                continuing.append(f"{sym_key}(unrealized={unrealized:.2f})")
-
-        summary = (
-            f"14:15 stop-lock complete — exited: {exited or 'none'}; "
-            f"continuing: {continuing}"
+        return self._finish_pyramid_handoff(
+            self._build_pyramid_handoff_result(
+                applied=False,
+                live_allowed=len(symbols_for_live) > 0,
+                reason="mongo_save_failed",
+                profitable_count=len(symbols_for_live),
+                symbols_for_live=symbols_for_live,
+            ),
+            pnl_rows,
         )
-        print(f"[1415-STOPLOCK] {summary}")
-        self.alerts.notify(summary)
 
     def _persist_paper_state_snapshot(self, event: str = "") -> None:
         """Refresh in-memory UI only — do not append MongoDB rows mid-cycle."""
@@ -3120,6 +3945,7 @@ class AutoTrader:
             "symbols": rows,
             "rms_triggered": self.rms_triggered,
             "rms_message": "Done for the day all positions exitted" if self.rms_triggered else None,
+            "simulation_logs": bool(getattr(self, "simulation_logs", True)),
         }
 
     # LIVE UI (FAST)
@@ -3136,6 +3962,7 @@ class AutoTrader:
             cycle=cycle,
             snapshot=snapshot,
             rows=rows,
+            simulation_logs=bool(getattr(self, "simulation_logs", True)),
         )
         except Exception as e:
             print(f"[DB ERROR] Trading snapshot insert failed: {e}")
@@ -3562,8 +4389,15 @@ class AutoTrader:
     def start(self, symbols, time_frame="5 minutes", candle_for_client=None,
               parameters=["close"], user_positions=None, initial_allocations = None,
               min_required_cash=0.0, stop_on_insufficient=True,
-              use_broker_cash_as_capital=True):
+              use_broker_cash_as_capital=True, leverage_multiplier=None):
         
+        if leverage_multiplier is not None:
+            coerced = self._coerce_leverage_multiplier(leverage_multiplier, "start_kwarg")
+            if coerced is not None:
+                self.leverage_multiplier = coerced
+        resolved_leverage = self._resolve_leverage_multiplier(default=1.0)
+        print(f"[LEVERAGE] Active session leverage multiplier: x{resolved_leverage}")
+
         # ==================== CANDLE NORMALIZATION ====================
         candle = (candle_for_client or "5m").lower().strip()
 
@@ -3698,10 +4532,6 @@ class AutoTrader:
                 # DOUBLE-EXECUTION GUARD (ONE EXECUTION PER CANDLE)
                 # =====================================================
                 now = self._now_market_time()
-
-                if not self._1415_stoplock_done and now.time() >= STOP_LOCK_TIME:
-                    self._run_1415_stoplock_exits(symbols)
-                    self._1415_stoplock_done = True
 
                 #temp change 
                 warning_time = dt_time(15, 25)  # 3:25 PM IST
@@ -4806,10 +5636,20 @@ class AutoTrader:
     def shutdown(self):
         print("[SHUTDOWN] Paper stop — applying capital pyramid update (no square-off)...")
         try:
-            self._apply_capital_pyramid_on_stop()
+            self._pyramid_handoff_result = self._apply_capital_pyramid_on_stop()
+            print(
+                f"[PYRAMID] handoff result: live_allowed={self._pyramid_handoff_result.get('live_allowed')} "
+                f"reason={self._pyramid_handoff_result.get('reason')} "
+                f"profitable_count={self._pyramid_handoff_result.get('profitable_count')}"
+            )
         except Exception as e:
             print(f"[SHUTDOWN] Capital pyramid update failed: {e}")
             traceback.print_exc()
+            self._pyramid_handoff_result = self._build_pyramid_handoff_result(
+                applied=False,
+                live_allowed=True,
+                reason="pyramid_exception",
+            )
         
         if hasattr(self, 'parallel_executor') and self.parallel_executor:
             self.parallel_executor.stop()
