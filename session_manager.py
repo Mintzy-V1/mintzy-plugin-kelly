@@ -64,6 +64,7 @@ def _trader_worker(
     mongo_db_name: str,
     configuration_id: Optional[str] = None,
     mongo_config_db_name: Optional[str] = None,
+    leverage_multiplier: Optional[float] = None,
 ):
     """
     Worker process that runs a single AutoTrader instance.
@@ -171,6 +172,12 @@ def _trader_worker(
         trader.symbol_allocations = {k: v["capital"] for k, v in allocations.items()}
         trader.initial_allocations = allocations
         trader.configuration_id = configuration_id
+        trader.simulation_logs = strategy == "B"
+        if leverage_multiplier is not None:
+            try:
+                trader.leverage_multiplier = float(leverage_multiplier)
+            except (TypeError, ValueError):
+                trader.leverage_multiplier = None
         
         # Signal that we're healthy and starting
         health_queue.put({
@@ -202,7 +209,10 @@ def _trader_worker(
         trader_thread = threading.Thread(
             target=trader.start,
             args=(symbols, time_frame, candle),
-            kwargs={"initial_allocations": allocations},
+            kwargs={
+                "initial_allocations": allocations,
+                "leverage_multiplier": leverage_multiplier,
+            },
             daemon=False  # Don't make daemon - we want proper cleanup
         )
         trader_thread.start()
@@ -680,10 +690,20 @@ class SessionManager:
         print(f"  Strategy: {strategy}")
         print(f"  Symbols: {symbols}")
         print(f"  Allocations: {allocations}")
-        
+
         time_frame = session_doc.get("time_frame", "5 minutes")
         candle = session_doc.get("candle", "5m")
         configuration_id = session_doc.get("configuration_id")
+        leverage_multiplier = session_doc.get("leverage_multiplier")
+        if leverage_multiplier is not None:
+            try:
+                leverage_multiplier = float(leverage_multiplier)
+                if leverage_multiplier <= 0:
+                    leverage_multiplier = None
+            except (TypeError, ValueError):
+                leverage_multiplier = None
+        if leverage_multiplier is not None:
+            print(f"  Leverage multiplier: {leverage_multiplier}")
         
         # Prepare broker config
         broker_config = {
@@ -700,7 +720,7 @@ class SessionManager:
             "mongodb+srv://mintzy01ai_db_user:zTqQRkovgKbLXQdp@cluster0.cztcxpr.mongodb.net/?appName=Cluster0"
         )
         mongo_db_name = os.environ.get("MONGO_DB_NAME", "mintzy_plugin")
-        mongo_config_db_name = os.environ.get("MONGO_CONFIG_DB_NAME", mongo_db_name)
+        mongo_config_db_name = os.environ.get("MONGO_CONFIG_DB_NAME", "test")
         
         # Create stop event and health queue for this worker
         stop_event = mp.Event()
@@ -723,6 +743,7 @@ class SessionManager:
                 mongo_db_name,
                 configuration_id,
                 mongo_config_db_name,
+                leverage_multiplier,
             ),
             daemon=False  # Not daemon - we want proper cleanup
         )
