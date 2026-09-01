@@ -2817,7 +2817,8 @@ class AutoTrader:
         raw_free_cash = float(free_cash)
         leverage_mult = self._resolve_leverage_multiplier(config_doc=config_doc, default=1.0)
         free_cash = raw_free_cash * leverage_mult
-        remaining_cash = free_cash - total_capital_allocated
+        # Distribute the full leveraged cash to pyramided names (do not subtract morning allocations).
+        remaining_cash = free_cash
         print(
             f"[PYRAMID] raw_free_cash={raw_free_cash:.2f} "
             f"leverage=x{leverage_mult} "
