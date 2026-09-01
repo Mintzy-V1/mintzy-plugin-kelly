@@ -3314,112 +3314,111 @@ class AutoTrader:
 
         return closed_candle_dt.strftime("%Y-%m-%d %H:%M")
         
+    def _shared_ltp_bar(self, now):
+        """15m slot from 09:30 IST (same grid as csv15m / plugin cycles)."""
+        local = now
+        if getattr(local, "tzinfo", None) is not None:
+            local = local.replace(tzinfo=None)
+        start = datetime.combine(local.date(), dt_time(9, 30))
+        end = datetime.combine(local.date(), dt_time(15, 0))
+        if local < start:
+            return start
+        asof = local if local <= end else end
+        slot = (int((asof - start).total_seconds() // 60) // 15) * 15
+        bar = start + timedelta(minutes=slot)
+        if bar > end:
+            bar = end
+        return bar
+
+    def _parse_shared_ltp(self, cached):
+        if cached is None:
+            return None
+        try:
+            val = float(cached)
+            return val if val > 0 else None
+        except (ValueError, TypeError):
+            pass
+        try:
+            data = json.loads(cached)
+            val = float(data["price"])
+            return val if val > 0 else None
+        except Exception:
+            return None
+
     def _get_live_price_redis(self, symbol: str, candle: str) -> Optional[float]:
         """
-        Worker-independent LIVE price cache using Redis.
-        Keyed by candle boundary so it auto-refreshes every candle.
+        Shared LTP for all accounts: GET price:ltp:{SYM}.NS:{date}:{HHMM}.
+        First caller SET NX after Upstox fetch; others only read. TTL 90 min.
+        /predict does not write this key. UI still uses curr_price as before.
         """
-        t_ltp_sym = time.time()  #  ADD THIS LINE
-
+        t_ltp_sym = time.time()
+        redis_client = getattr(self.market_client, "redis_client", None)
+        now = self._now_market_time()
+        bar = self._shared_ltp_bar(now)
+        redis_key = (
+            f"price:ltp:{symbol}.NS:{bar.strftime('%Y-%m-%d')}:{bar.strftime('%H%M')}"
+        )
         print(
-            f"[LTP FUNC] symbol={symbol} candle={candle} "
-            f"redis={'YES' if getattr(self.market_client, 'redis_client', None) else 'NO'} "
-            f"fetch_price={'YES' if hasattr(self.market_client, 'fetch_price') else 'NO'}",
+            f"[LTP FUNC] symbol={symbol} candle={candle} key={redis_key} "
+            f"redis={'YES' if redis_client else 'NO'}",
             flush=True
         )
-
+        if redis_client is None:
+            return None
         try:
-            # Ensure redis exists
-            redis_client = getattr(self.market_client, "redis_client", None)
-            if redis_client is None:
-                return None
+            cached = redis_client.get(redis_key)
+            val = self._parse_shared_ltp(cached)
+            if val is not None:
+                print(f"[LTP SHARED] GET hit {redis_key} price={val:.4f}")
+                return val
 
-            now = self._now_market_time()
-            candle_key = self._get_candle_key(now, candle)
-
-            # redis_key_without_ns = f"price:live:{symbol}"
-            redis_key_with_ns = f"price:live:{symbol}.NS"
-            
-            # cached_without_ns = redis_client.get(redis_key_without_ns)
-            cached_with_ns = redis_client.get(redis_key_with_ns)
-
-            print(f"\n[DEBUG-VERIFY] BOTH KEYS FETCH TEST:")
-            # print(f"  --> Key '{redis_key_without_ns}'     = {cached_without_ns}")
-            print(f"  --> Key '{redis_key_with_ns}'  = {cached_with_ns}")
-
-            # redis_key = redis_key_without_ns
-            redis_key = redis_key_with_ns
-            cached = cached_with_ns
-
-            if cached:
-                try:
-                    val = float(cached)
+            for _ in range(8):
+                time.sleep(0.15)
+                cached = redis_client.get(redis_key)
+                val = self._parse_shared_ltp(cached)
+                if val is not None:
+                    print(f"[LTP SHARED] GET wait-hit {redis_key} price={val:.4f}")
                     return val
-                except (ValueError, TypeError):
-                    pass
-                try:
-                    data = json.loads(cached)
-                    val = float(data["price"])
-                    elapsed_ltp = round(time.time() - t_ltp_sym, 3)
-                    print(f"[TIMING] LTP_PER_SYMBOL {symbol:<15} {elapsed_ltp:>7.3f}s  source=REDIS_JSON")
-                    return val
-                except Exception as e:
-                    pass
 
-
-            # 2) Fetch CLOSED candle price  must match what prediction_service
-            # uses as anchor (closed candle start = floor(now-60s) to step boundary)
             if not hasattr(self.market_client, "fetch_price"):
                 return None
-
             ticker = f"{symbol}.NS"
-            step_val = 5  # Hardcoded to 5m boundaries
-            elapsed = (now.hour * 60 + now.minute) - (9 * 60 + 15)
-            if elapsed < 0:
-                elapsed = 0
-            floored_offset = (elapsed // step_val) * step_val
-            ist_tz = now.tzinfo
-            closed_candle_dt = now.replace(
-                hour=9, minute=15, second=0, microsecond=0
-            ) + timedelta(minutes=floored_offset)
-
+            bar_dt = bar
+            if now.tzinfo is not None and bar_dt.tzinfo is None:
+                bar_dt = bar_dt.replace(tzinfo=now.tzinfo)
             tlog_fetch_price_start = time.time()
-            print("calling market_client.fetch_price inside the get_live_price_redis",ticker,closed_candle_dt,candle)
+            print("calling market_client.fetch_price inside the get_live_price_redis", ticker, bar_dt, candle)
             px = self.market_client.fetch_price(
                 ticker=ticker,
-                target_datetime=closed_candle_dt,
-                candle=candle
+                target_datetime=bar_dt,
+                candle=candle,
             )
-            tlog_fetch_price_end = time.time()
-            print(f"[TIMING] LTP_PER_SYMBOL {symbol:<15} {tlog_fetch_price_end - tlog_fetch_price_start:>7.3f}s  source=BROKER_FETCH")
-            self.tlog.record("fetch_Price_total_time", tlog_fetch_price_start, note=f"fetch_price_total_time={tlog_fetch_price_end - tlog_fetch_price_start}")
-
-            if not px:
-                return None
-
-            print("px is present",px)
-
-            live = px.get("Close")
-            if live is None:
-                return None
-
-            live = float(live)
-            if live <= 0:
-                return None
-
-            # 3) Cache in Redis: short TTL (safe)
-            # Since key is candle-specific, TTL is just to clean up memory.
-            # 90 sec is enough.
-            # redis_client.setex(redis_key, 90, str(live))
-
-            candle_ttl = 70 if candle == "1m" else 420   # 60s fire delay + 300s candle + buffer
-            redis_client.setex(redis_key, candle_ttl, str(live))
-
-            # return live
+            self.tlog.record(
+                "fetch_Price_total_time",
+                tlog_fetch_price_start,
+                note=f"fetch_price_total_time={time.time() - tlog_fetch_price_start}",
+            )
+            if not px or float(px.get("Close") or 0) <= 0:
+                cached = redis_client.get(redis_key)
+                return self._parse_shared_ltp(cached)
+            live = float(px["Close"])
+            payload = json.dumps({
+                "price": live,
+                "bar": bar.strftime("%H:%M"),
+                "source": "trader_setnx",
+            })
+            created = redis_client.set(redis_key, payload, nx=True, ex=5400)
+            print(
+                f"[LTP SHARED] SET NX {redis_key} price={live:.4f} created={bool(created)}"
+            )
+            if not created:
+                cached = redis_client.get(redis_key)
+                val = self._parse_shared_ltp(cached)
+                if val is not None:
+                    return val
             elapsed_ltp = round(time.time() - t_ltp_sym, 3)
-            print(f"[TIMING] LTP_PER_SYMBOL {symbol:<15} {elapsed_ltp:>7.3f}s  source=BROKER_FETCH")
+            print(f"[TIMING] LTP_PER_SYMBOL {symbol:<15} {elapsed_ltp:>7.3f}s  source=SHARED_LTP")
             return live
-
         except Exception as e:
             print(f"[LIVE PRICE REDIS ERROR] {symbol}: {e}")
             return None
@@ -3997,16 +3996,15 @@ class AutoTrader:
             print(
                 f"[LIVE RESULT] {symbol} "
                 f"live_price={live_price} "
-                f"({'FALLBACK predicted[0]' if live_price is None else 'USING LIVE'})",
+                f"({'FALLBACK predicted[0]' if live_price is None else 'USING SHARED LTP'})",
                 flush=True
             )
             
-            # fallback to predicted first point if live fetch fails
+            # Last resort only if Redis SET NX / GET both failed (keeps Trade logs row)
             current_price = float(live_price) if live_price else float(predicted_path[0])
             
             if live_price is None:
-                print(f"\n[DEBUG-VERIFY] {symbol}: `live_price` is missing entirely! Falling back to static predicted_path[0]: {current_price}")
-                print(f"[DEBUG-VERIFY] This fallback price is why the UI stays stagnant all day.")
+                print(f"\n[DEBUG-VERIFY] {symbol}: shared LTP missing — using predicted_path[0]: {current_price}")
 
             print(
                 f"[CURR PRICE FINAL] {symbol} curr_price={current_price}",
