@@ -85,8 +85,12 @@ class TimingLogger:
 # Market timezone: IST (UTC+5:30)
 MARKET_TZ = timezone(timedelta(hours=5, minutes=30))
 
-# 12:00 IST stop-lock — exit losers, continue with green symbols
-STOP_LOCK_TIME = dt_time(12, 0)
+# Hard square-off window (IST)
+MARKET_EXIT_TIME = dt_time(15, 0)       # 3:00 PM IST — exit all open positions
+MARKET_EXIT_WARN_TIME = dt_time(14, 55) # 2:55 PM IST — warning before auto exit
+
+# 14:15 IST stop-lock — exit losers, continue with green symbols
+STOP_LOCK_TIME = dt_time(14, 15)
 
 
 def load_json(path):
@@ -496,6 +500,10 @@ class AutoTrader:
         self.cash_balance = initial_capital
         self.get_access_token = get_access_token
         self.trading_logs_collection = trading_logs_collection
+        self.config_db_name = os.environ.get("MONGO_CONFIG_DB_NAME", "test")
+        self.configuration_id = None
+        self.leverage_multiplier = None
+        self.simulation_logs = False
         self.max_exposure_pct = 1.00
         self.reserved_exposure = {}  
         self.symbol_locks = {}        
@@ -536,6 +544,8 @@ class AutoTrader:
         self.stop_event = threading.Event()
         self._exit_warning_sent = False
         self._stoplock_done = False
+        self._eod_exit_done = False
+        self._eod_exit_lock = threading.Lock()
         self.positions_lock = threading.Lock()   #  ADD THIS LINE
         self._exited_symbols = set()  # Symbols manually exited Ã¢â‚¬â€ excluded from future cycles
 
@@ -1000,6 +1010,30 @@ class AutoTrader:
         except Exception as e:
             print(f"[RMS-TICKER] redis notify failed for {symbol}: {e}")
 
+    def _notify_eod_exit_status_to_api(self, reason: str = "MARKET_CLOSE_15:00_IST") -> None:
+        """
+        Publish EOD exit status to Redis so api_server (separate process) can
+        serve accurate exit_initiated / exit_time on /api/trading/exit-status.
+        """
+        try:
+            sid = getattr(self, "session_id", None) or getattr(self, "ui_session_id", None)
+            rc = getattr(self.market_client, "redis_client", None)
+            if not sid or rc is None:
+                print("[EOD] exit_status redis notify skipped (no session_id or redis)")
+                return
+            exit_time = self._now_market_time().isoformat()
+            payload = {
+                "exit_initiated": True,
+                "exit_time": exit_time,
+                "reason": reason,
+                "ts": time.time(),
+            }
+            key = f"autotrader:exit_status:{sid}"
+            rc.setex(key, 86400, json.dumps(payload))
+            print(f"[EOD] exit_status published to redis key={key} reason={reason}")
+        except Exception as e:
+            print(f"[EOD] exit_status redis notify failed: {e}")
+
     # ---------- TIME HELPERS ----------
     
     def _now_market_time(self):
@@ -1024,6 +1058,115 @@ class AutoTrader:
     def _reserved_exposure(self, symbol):
         return self.reserved_exposure.get(symbol, 0.0)
 
+    @staticmethod
+    def _coerce_leverage_multiplier(value, source: str = "") -> Optional[float]:
+        if value is None:
+            return None
+        try:
+            mult = float(value)
+            if mult > 0:
+                return mult
+            print(f"[LEVERAGE] Ignoring non-positive {source}: {value!r}")
+        except (TypeError, ValueError):
+            print(f"[LEVERAGE] Invalid {source}: {value!r}")
+        return None
+
+    def _normalize_configuration_root(self, config_doc: dict) -> dict:
+        root = config_doc.get("configuration", config_doc)
+        if isinstance(root, str):
+            try:
+                root = json.loads(root)
+            except Exception as exc:
+                print(f"[LEVERAGE] configuration JSON parse failed: {exc}")
+                return {}
+        if not isinstance(root, dict):
+            return {}
+        return root
+
+    def _leverage_from_config_doc(self, config_doc: dict) -> Optional[float]:
+        if not isinstance(config_doc, dict):
+            return None
+        for key in ("leverage_multiplier", "leverage", "pyramid_leverage_multiplier"):
+            val = self._coerce_leverage_multiplier(
+                config_doc.get(key), f"SavedTradingConfiguration.{key}"
+            )
+            if val is not None:
+                return val
+        root = self._normalize_configuration_root(config_doc)
+        for key in ("leverage_multiplier", "leverage", "pyramid_leverage_multiplier"):
+            val = self._coerce_leverage_multiplier(root.get(key), f"configuration.{key}")
+            if val is not None:
+                return val
+        return None
+
+    def _fetch_saved_trading_configuration_for_leverage(self) -> Optional[dict]:
+        configuration_id = getattr(self, "configuration_id", None)
+        coll = self.trading_logs_collection
+        if not configuration_id or coll is None:
+            return None
+
+        config_db_name = getattr(self, "config_db_name", None) or os.environ.get(
+            "MONGO_CONFIG_DB_NAME", "test"
+        )
+        collection_names = (
+            "savedtradingconfigurations",
+            "SavedTradingConfiguration",
+        )
+        mongo_client = coll.database.client
+        config_db = mongo_client[config_db_name]
+
+        queries = [{"configuration_id": configuration_id}]
+        try:
+            from bson import ObjectId
+
+            if ObjectId.is_valid(configuration_id):
+                oid = ObjectId(configuration_id)
+                queries.insert(0, {"_id": oid})
+                queries.append({"configuration_id": str(oid)})
+        except Exception:
+            pass
+
+        for coll_name in collection_names:
+            if coll_name not in config_db.list_collection_names():
+                continue
+            config_coll = config_db[coll_name]
+            for query in queries:
+                try:
+                    doc = config_coll.find_one(query)
+                except Exception as exc:
+                    print(f"[LEVERAGE] SavedTradingConfiguration lookup failed: {exc}")
+                    continue
+                if doc:
+                    return doc
+        return None
+
+    def _resolve_leverage_multiplier(self, config_doc=None, default: float = 4.0) -> float:
+        """
+        Resolve intraday leverage: session/request -> SavedTradingConfiguration -> default.
+        Live exposure cap defaults to 4.0 (legacy behavior) when unset.
+        """
+        val = self._coerce_leverage_multiplier(
+            getattr(self, "leverage_multiplier", None), "session"
+        )
+        if val is not None:
+            self.leverage_multiplier = val
+            return val
+
+        doc = config_doc
+        if doc is None:
+            doc = self._fetch_saved_trading_configuration_for_leverage()
+
+        if doc:
+            val = self._leverage_from_config_doc(doc)
+            if val is not None:
+                self.leverage_multiplier = val
+                print(f"[LEVERAGE] Using leverage_multiplier={val} from SavedTradingConfiguration")
+                return val
+
+        self.leverage_multiplier = float(default)
+        print(f"[LEVERAGE] Falling back to leverage_multiplier={default}")
+        return float(default)
+
     # ---------- TOTAL SYMBOL EXPOSURE (FILLED + RESERVED) -------------
     
     def _total_symbol_exposure(self, symbol):
@@ -1033,7 +1176,8 @@ class AutoTrader:
 
     def _can_reserve_exposure(self, symbol, order_value):
         t0 = time.time()
-        leveraged_capital  = 4* self.initial_capital
+        leverage_mult = self._resolve_leverage_multiplier(default=4.0)
+        leveraged_capital = leverage_mult * self.initial_capital
 
         result = (self._total_symbol_exposure(symbol) + order_value) <= (self.max_exposure_pct * leveraged_capital)
 
@@ -1589,6 +1733,20 @@ class AutoTrader:
             missed = int((now - next_run).total_seconds() // (step * 60)) + 1
             next_run += timedelta(minutes=missed * step)
 
+        # Cap sleep so we wake at/before 15:00 IST for forced square-off
+        today_exit = now.replace(
+            hour=MARKET_EXIT_TIME.hour,
+            minute=MARKET_EXIT_TIME.minute,
+            second=0,
+            microsecond=0,
+        )
+        if now < today_exit < next_run:
+            next_run = today_exit
+            print(
+                f"[SCHEDULER] capping sleep to MARKET_EXIT "
+                f"{today_exit.strftime('%H:%M:%S')} IST"
+            )
+
         sleep_seconds = max(1, (next_run - now).total_seconds())
         print(
             f"[SCHEDULER] now={now.strftime('%H:%M:%S')} "
@@ -1602,6 +1760,9 @@ class AutoTrader:
             if self.stop_event.is_set():
                 print("[SCHEDULER] Stop signal mila neend mein  uth raha hoon!")
                 return   #  neend se uthta hai, loop pe wapas jaata hai
+            if self._now_market_time().time() >= MARKET_EXIT_TIME:
+                print("[SCHEDULER] 15:00 IST reached during sleep — waking for square-off")
+                return
             time.sleep(1)
 
 
@@ -1615,6 +1776,13 @@ class AutoTrader:
         # time.sleep(sleep_seconds)
 
     def _exit_all_positions_and_stop(self):
+        # Idempotent: 15:00 loop exit + worker shutdown() must not double-place exits
+        with self._eod_exit_lock:
+            if self._eod_exit_done:
+                print("[EOD] Square-off already completed — skipping duplicate exit")
+                return True
+            self._eod_exit_done = True
+
         try:
             angel_orders = fetch_todays_intraday_orders(self.broker)
             self._generate_final_merged_tradebook(angel_orders=angel_orders)
@@ -1622,10 +1790,11 @@ class AutoTrader:
             print(f"[EOD MERGE ERROR] {e}")
         
         print("\n" + "=" * 80)
-        print("  MARKET CLOSE APPROACHING - EXITING ALL POSITIONS")
+        print("  MARKET CLOSE (3:00 PM IST) - EXITING ALL POSITIONS")
         print("=" * 80)
         
-        self.alerts.notify(" 1:30 PM - Initiating exit of all positions")
+        self.alerts.notify("3:00 PM IST - Initiating exit of all positions")
+        self._notify_eod_exit_status_to_api(reason="MARKET_CLOSE_15:00_IST")
         
         # Get current broker positions
         with self.broker_pos_lock:
@@ -1638,6 +1807,19 @@ class AutoTrader:
             return True
         
         print(f"[INFO] Found {len(broker_positions)} position(s) to exit")
+
+        eod_exit_records = {}
+        for pos in broker_positions:
+            sym = pos["symbol"]
+            position_side = pos["side"]
+            exit_side = "SELL" if position_side == "BUY" else "BUY"
+            eod_exit_records[sym] = {
+                "symbol": sym,
+                "position_side": position_side,
+                "exit_side": exit_side,
+                "qty": pos.get("qty", 0),
+                "price": float(pos.get("ltp") or 0.0),
+            }
         
         # Collect all exit orders
         exit_orders = []
@@ -1685,6 +1867,12 @@ class AutoTrader:
                 sym = result.symbol
                 metadata = result.metadata or {}
                 original_side = metadata.get("original_side", "UNKNOWN")
+
+                if sym in eod_exit_records:
+                    if result.avg_price and float(result.avg_price) > 0:
+                        eod_exit_records[sym]["price"] = float(result.avg_price)
+                    elif metadata.get("curr_price"):
+                        eod_exit_records[sym]["price"] = float(metadata["curr_price"])
                 
                 if result.success:
                     successful_exits += 1
@@ -1736,6 +1924,11 @@ class AutoTrader:
         # Final sync
         print("\n[FINAL SYNC] Syncing with broker...")
         self._sync_cash_with_broker()
+
+        try:
+            self._persist_eod_exit_trading_logs(list(eod_exit_records.values()))
+        except Exception as e:
+            print(f"[EOD-LOG] trading_logs insert failed: {e}")
         
         # Clear internal positions
         self.positions.clear()
@@ -1758,7 +1951,7 @@ class AutoTrader:
         
         return True
 
-    def exit_single_position(self, symbol: str) -> dict:
+    def exit_single_position(self, symbol: str, log_signal: str = None) -> dict:
         """
         Exit a single symbol's position.
         - Fetches broker positions for this symbol
@@ -1838,6 +2031,32 @@ class AutoTrader:
                 # Mark symbol as exited Ã¢â‚¬â€ will be excluded from next trading cycle
                 self._exited_symbols.add(symbol)
                 print(f"[SINGLE EXIT] {symbol} added to _exited_symbols Ã¢â‚¬â€ will be skipped in future cycles")
+
+                if log_signal:
+                    session_id = getattr(self, "ui_session_id", None) or getattr(self, "session_id", None)
+                    if session_id:
+                        symbol_unrealized_pnl = round(self._get_symbol_unrealized_pnl(symbol), 2)
+                        symbol_realized_pnl = round(float(self.realized_pnl_by_symbol.get(symbol, 0.0)), 2)
+                        symbol_pnl = round(symbol_realized_pnl + symbol_unrealized_pnl, 2)
+                        self.current_cycle_ts_str = self._now_market_time().strftime("%Y-%m-%d %H:%M:%S")
+                        self._update_ui_snapshot(
+                            session_id,
+                            getattr(self, "_cycle_count", 0) + 1,
+                            [{
+                                "symbol": symbol,
+                                "curr_price": round(float(curr_price), 2),
+                                "return_pct": 0.0,
+                                "side": side,
+                                "signal": log_signal,
+                                "action": f"{log_signal} EXIT SENT",
+                                "qty": qty,
+                                "unrealized_pnl": symbol_unrealized_pnl,
+                                "symbol_unrealized_pnl": symbol_unrealized_pnl,
+                                "symbol_realized_pnl": symbol_realized_pnl,
+                                "symbol_pnl": symbol_pnl,
+                                "pnl": symbol_pnl,
+                            }],
+                        )
 
                 msg = f"Exit order sent for {symbol} (closing {side} position, qty={qty})"
                 print(f"[SINGLE EXIT] Ã¢Å“â€¦ {msg}")
@@ -2167,6 +2386,7 @@ class AutoTrader:
             "symbols": rows,
             "rms_triggered": self.rms_triggered,
             "rms_message": "Done for the day all positions exitted" if self.rms_triggered else None,
+            "simulation_logs": bool(getattr(self, "simulation_logs", False)),
         }
 
     # LIVE UI (FAST)
@@ -2180,9 +2400,48 @@ class AutoTrader:
             cycle=cycle,
             snapshot=snapshot,
             rows=rows,
+            simulation_logs=bool(getattr(self, "simulation_logs", False)),
         )
         except Exception as e:
             print(f"[DB ERROR] Trading snapshot insert failed: {e}")
+
+    def _persist_eod_exit_trading_logs(self, exit_records: list) -> None:
+        """Save 15:00 / shutdown square-off rows to trading_logs for the frontend."""
+        if not exit_records:
+            return
+        session_id = getattr(self, "ui_session_id", None) or getattr(self, "session_id", None)
+        if not session_id:
+            print("[EOD-LOG] No session_id — skipping trading_logs insert")
+            return
+
+        rows = []
+        for rec in exit_records:
+            sym = rec["symbol"]
+            exit_side = rec["exit_side"]  # actual order placed: BUY or SELL
+            position_side = rec["position_side"]  # position we had: BUY (long) or SELL (short)
+            qty = int(rec.get("qty") or 0)
+            price = float(rec.get("price") or 0.0)
+            symbol_realized = round(float(self.realized_pnl_by_symbol.get(sym, 0.0)), 2)
+            rows.append({
+                "symbol": sym,
+                "curr_price": round(price, 2),
+                "return_pct": 0.0,
+                "side": position_side,
+                "signal": "",
+                "action": exit_side,
+                "qty": qty,
+                "unrealized_pnl": 0.0,
+                "symbol_unrealized_pnl": 0.0,
+                "symbol_realized_pnl": symbol_realized,
+                "symbol_pnl": symbol_realized,
+                "pnl": symbol_realized,
+            })
+
+        self.current_cycle_ts_str = self._now_market_time().strftime("%Y-%m-%d %H:%M:%S")
+        self.unrealized_pnl = 0.0
+        cycle = getattr(self, "_cycle_count", 0) + 1
+        print(f"[EOD-LOG] Persisting {len(rows)} square-off row(s) to trading_logs (cycle={cycle})")
+        self._update_ui_snapshot(session_id, cycle, rows)
 
     def _sync_cash_with_broker(self):
         print("[SYNC] Syncing cash balance with broker...")
@@ -2434,7 +2693,7 @@ class AutoTrader:
         return 0.0
 
     def _run_stoplock_exits(self, active_symbols: list) -> None:
-        """At 12:00 IST exit open symbols with unrealized_pnl < 0; continue with the rest."""
+        """At 14:15 IST exit open symbols with unrealized_pnl < 0; continue with the rest."""
         now = self._now_market_time()
         print(
             f"[STOPLOCK] Check at {now.strftime('%Y-%m-%d %H:%M:%S')} IST "
@@ -2466,7 +2725,7 @@ class AutoTrader:
             unrealized = self._get_symbol_unrealized_pnl(sym_key)
             if unrealized < 0:
                 print(f"[STOPLOCK] {sym_key} unrealized={unrealized:.2f} — placing exit")
-                result = self.exit_single_position(sym_key)
+                result = self.exit_single_position(sym_key, log_signal="STOP_LOCK")
                 if result.get("success"):
                     exited.append(sym_key)
                 else:
@@ -2478,7 +2737,7 @@ class AutoTrader:
                 continuing.append(f"{sym_key}(unrealized={unrealized:.2f})")
 
         summary = (
-            f"12:00 stop-lock complete — exited: {exited or 'none'}; "
+            f"14:15 stop-lock complete — exited: {exited or 'none'}; "
             f"continuing: {continuing}"
         )
         print(f"[STOPLOCK] {summary}")
@@ -2697,8 +2956,15 @@ class AutoTrader:
     def start(self, symbols, time_frame="5 minutes", candle_for_client=None,
               parameters=["close"], user_positions=None, initial_allocations = None,
               min_required_cash=0.0, stop_on_insufficient=True,
-              use_broker_cash_as_capital=True):
+              use_broker_cash_as_capital=True, leverage_multiplier=None):
         
+        if leverage_multiplier is not None:
+            coerced = self._coerce_leverage_multiplier(leverage_multiplier, "start_kwarg")
+            if coerced is not None:
+                self.leverage_multiplier = coerced
+        resolved_leverage = self._resolve_leverage_multiplier(default=4.0)
+        print(f"[LEVERAGE] Active session leverage multiplier: x{resolved_leverage}")
+
         # ==================== CANDLE NORMALIZATION ====================
         candle = (candle_for_client or "5m").lower().strip()
 
@@ -2712,13 +2978,11 @@ class AutoTrader:
         market_now = self._now_market_time()
         now_time = market_now.time()
 
-        # NSE cash market typical intraday window
-        market_open  = dt_time(9, 15)   # 9:15 AM IST
-        market_close = dt_time(15, 20)  # 3:20 PM IST (your existing cutoff)
+        # NSE cash market typical intraday window — start only strictly before square-off
+        market_open = dt_time(9, 15)   # 9:15 AM IST
 
-        #temp change 
-        # Block weekends or outside this time window
-        if market_now.weekday() >= 5 or not (market_open <= now_time <= market_close):
+        # Block weekends or at/after 15:00 IST (no new sessions in auto-exit window)
+        if market_now.weekday() >= 5 or not (market_open <= now_time < MARKET_EXIT_TIME):
             msg = (
                 f"Market closed in IST. Now: "
                 f"{market_now.strftime('%Y-%m-%d %H:%M:%S')} AutoTrader will not start."
@@ -2728,7 +2992,13 @@ class AutoTrader:
             return
         # ----------------------------------------
 
-        if not getattr(self, "session", None) or not getattr(self, "broker", None):
+        sess = getattr(self, "session", None)
+        has_live = (
+            isinstance(sess, dict)
+            and sess.get("obj") is not None
+            and getattr(self, "broker", None) is not None
+        )
+        if not has_live:
             try:
                 self._link_broker()
             except Exception as e:
@@ -2786,6 +3056,7 @@ class AutoTrader:
         self._seed_realized_pnl_from_broker()
 
         cycle_count = 0
+        self._cycle_count = 0
         sync_counter = 0
         
         # ---- START BACKGROUND RECONCILIATION THREAD ----
@@ -2833,17 +3104,14 @@ class AutoTrader:
                     self._stoplock_done = True
 
                 #temp change 
-                warning_time = dt_time(15, 25)  # 3:25 PM IST
-                if now.time() >= warning_time and not self._exit_warning_sent:
-                    msg = " 2:25 PM - Market closing in 5 minutes. All positions will be exited at 1:30 PM."
+                if now.time() >= MARKET_EXIT_WARN_TIME and not self._exit_warning_sent:
+                    msg = "2:55 PM IST - Market closing in 5 minutes. All positions will be exited at 3:00 PM IST."
                     print(f"\n{msg}")
                     self.alerts.notify(msg)
                     self._exit_warning_sent = True
                 
-                # EXIT ALL POSITIONS AT 3:40 PM IST
-                market_exit_time = dt_time(15, 40)  # 3:40 PM IST
-                
-                if now.time() >= market_exit_time:
+                # EXIT ALL POSITIONS AT 3:00 PM IST
+                if now.time() >= MARKET_EXIT_TIME:
                     print(f"\n[MARKET CLOSE] Current time: {now.strftime('%H:%M:%S')} - Initiating shutdown")
                     
                     # Exit all positions
@@ -2904,6 +3172,7 @@ class AutoTrader:
                             self.positions[sym] = pos.copy()
                             
                 cycle_count += 1
+                self._cycle_count = cycle_count
                 sync_counter += 1
 
                 if sync_counter >= 5 and len(self.positions) == 0:
@@ -3843,18 +4112,17 @@ class AutoTrader:
                     )
 
                 # ==============================
-                # BACKUP EXIT AT 3:20 PM CHECK
+                # BACKUP EXIT AT 3:00 PM IST (end-of-cycle safety net)
                 # ==============================
                 market_now = self._now_market_time()
                 now_time = market_now.time()
-                cutoff_time = dt_time(15, 20)
                 print("time after analyse after second broker api call : ", time.time()- t_after_brp_call)
                 self.tlog.record("time after analyse after second broker api call" ,t_after_brp_call , note="time analysis of delay")
 
-                if now_time >= cutoff_time:
-                    self.alerts.notify("Backup market close triggered (3:20 PM) - This shouldn't happen!")
+                if now_time >= MARKET_EXIT_TIME:
+                    self.alerts.notify("Backup market close triggered (3:00 PM IST)")
                     print("\n" + "=" * 70)
-                    print("BACKUP MARKET CLOSE - AUTO-TRADING STOPPED")
+                    print("BACKUP MARKET CLOSE (3:00 PM IST) - AUTO-TRADING STOPPED")
                     print("=" * 70)
 
                     print("\n[BACKUP EXIT] Attempting to exit remaining positions...")

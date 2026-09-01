@@ -4,6 +4,7 @@ def insert_trading_snapshot(
     cycle: int,
     snapshot: dict,
     rows: list[dict],
+    simulation_logs: bool = False,
 ):
     if not rows:
         return
@@ -35,6 +36,7 @@ def insert_trading_snapshot(
             "session_id": session_id,
             "cycle": cycle,
             "timestamp": snapshot["timestamp"],
+            "simulation_logs": bool(simulation_logs),
 
             "symbol": r.get("symbol"),
             "curr_price": r.get("curr_price"),
