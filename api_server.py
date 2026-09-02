@@ -2614,6 +2614,36 @@ async def get_pyramid_pnl(session_id: str, x_plugin_api_key: str = Header(None))
     return {"success": True, **doc}
 
 
+@app.get("/api/trading/exited-symbols/{session_id}")
+async def get_exited_symbols(session_id: str, x_plugin_api_key: str = Header(None)):
+    if not DB_CONNECTED or exited_symbols_collection is None:
+        logger.warning("[EXITED-SYMBOLS-API] database unavailable session_id=%s", session_id)
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+    logger.info("[EXITED-SYMBOLS-API] fetch start session_id=%s", session_id)
+    cursor = exited_symbols_collection.find(
+        {"session_id": session_id},
+        {"_id": 0},
+    ).sort([
+        ("exit_time_utc", 1),
+        ("updated_at", 1),
+        ("symbol", 1),
+    ])
+    symbols = await run_in_threadpool(list, cursor)
+    logger.info(
+        "[EXITED-SYMBOLS-API] fetch done session_id=%s count=%s symbols=%s",
+        session_id,
+        len(symbols),
+        [row.get("symbol") for row in symbols],
+    )
+    return {
+        "success": True,
+        "session_id": session_id,
+        "count": len(symbols),
+        "symbols": symbols,
+    }
+
+
 #exit statusendpoint 
 @app.get("/api/trading/exit-status/{session_id}")
 async def get_exit_status(session_id: str, x_plugin_api_key: str = Header(None)):

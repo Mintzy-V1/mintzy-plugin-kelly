@@ -1053,14 +1053,21 @@ class AutoTrader:
 
     def _rms_exit_worker(self, symbol: str) -> None:
         """Run exit_single_position off the WS thread."""
+        sym = self._normalize_config_symbol(symbol)
+        print(f"[RMS-TICKER] worker start symbol={sym} reason=RMS_TICKER_EXIT")
         try:
-            self.exit_single_position(symbol, exit_reason="RMS_TICKER_EXIT")
+            result = self.exit_single_position(sym, exit_reason="RMS_TICKER_EXIT")
+            print(
+                f"[RMS-TICKER] worker done symbol={sym} "
+                f"success={result.get('success')} order_id={result.get('order_id')} "
+                f"message={result.get('message')}"
+            )
         except Exception as e:
-            print(f"[RMS-TICKER] exit failed for {symbol}: {e}")
+            print(f"[RMS-TICKER] exit failed for {sym}: {e}")
         finally:
             # exit_single_position adds to _exited_symbols on success;
             # drop the inflight marker either way so a retry is possible if it failed.
-            self._rms_exit_inflight.discard(symbol)
+            self._rms_exit_inflight.discard(sym)
 
     def _notify_rms_exit_to_api(self, symbol: str, pnl: float) -> None:
         """
@@ -1077,6 +1084,7 @@ class AutoTrader:
                 json.dumps({"symbol": symbol, "pnl": pnl, "ts": time.time()}),
             )
             rc.expire(f"autotrader:rms_exited:{sid}", 86400)
+            print(f"[RMS-TICKER] redis notify queued session={sid} symbol={symbol} pnl={float(pnl or 0.0):.2f}")
         except Exception as e:
             print(f"[RMS-TICKER] redis notify failed for {symbol}: {e}")
 
@@ -1202,6 +1210,10 @@ class AutoTrader:
             }
         with self._paper_lock:
             self._paper_positions.pop(sym, None)
+        print(
+            f"[EXITED-SYMBOLS] live pnl cleared session={self._get_session_id_for_db()} "
+            f"symbol={sym} reason={exit_reason} exit_price={float(exit_price or 0.0):.2f}"
+        )
 
     def _persist_exit_pending(
         self,
@@ -1216,6 +1228,10 @@ class AutoTrader:
         sid = self._get_session_id_for_db()
         coll = self._get_exited_symbols_collection()
         if not sid or coll is None:
+            print(
+                f"[EXITED-SYMBOLS] pending persist skipped symbol={symbol} "
+                f"session_present={bool(sid)} collection_present={coll is not None}"
+            )
             return
 
         actual_cycle, display_cycle = self._get_exit_cycle_numbers()
@@ -1260,17 +1276,25 @@ class AutoTrader:
                 {"$set": doc, "$setOnInsert": {"created_at": now_utc.isoformat(), "requested_at": now_market.strftime("%Y-%m-%d %H:%M:%S")}},
                 upsert=True,
             )
+            print(
+                f"[EXITED-SYMBOLS] pending saved session={sid} symbol={sym} "
+                f"reason={exit_reason} order_id={exit_order_id} "
+                f"actual_cycle={actual_cycle} display_cycle={display_cycle} "
+                f"unrealized={pending_unrealized:.2f}"
+            )
         except Exception as exc:
             print(f"[EXITED-SYMBOLS] pending persist failed for {sym}: {exc}")
 
     def _persist_exit_trading_log(self, exit_doc: dict) -> None:
         coll = self.trading_logs_collection
         if coll is None:
+            print(f"[TRADING-LOGS] exit row skipped symbol={exit_doc.get('symbol')} collection_present=False")
             return
 
         sid = exit_doc.get("session_id")
         sym = exit_doc.get("symbol")
         if not sid or not sym:
+            print(f"[TRADING-LOGS] exit row skipped missing session/symbol session={sid} symbol={sym}")
             return
 
         display_cycle = int(exit_doc.get("display_cycle") or 1)
@@ -1330,6 +1354,12 @@ class AutoTrader:
                 {"session_id": sid, "symbol": sym, "is_exit_row": True},
                 {"$set": row, "$setOnInsert": {"created_at": datetime.now(timezone.utc).isoformat()}},
                 upsert=True,
+            )
+            print(
+                f"[TRADING-LOGS] exit row upserted session={sid} symbol={sym} "
+                f"cycle={display_cycle} actual_cycle={exit_doc.get('exit_actual_cycle')} "
+                f"reason={exit_doc.get('exit_reason')} realized={realized:.2f} "
+                f"unrealized=0.00 order_id={exit_doc.get('exit_order_id')}"
             )
         except Exception as exc:
             print(f"[TRADING-LOGS] exit row persist failed for {sym}: {exc}")
@@ -1395,8 +1425,20 @@ class AutoTrader:
                     {"$set": doc, "$setOnInsert": {"created_at": now_utc.isoformat()}},
                     upsert=True,
                 )
+                print(
+                    f"[EXITED-SYMBOLS] final saved session={sid} symbol={sym} "
+                    f"reason={exit_reason} status=EXITED order_id={exit_order_id} "
+                    f"entry={entry_price:.2f} exit={exit_price:.2f} qty={int(qty or 0)} "
+                    f"exit_realized={exit_realized_pnl:.2f} cumulative_realized={cumulative_realized_pnl:.2f} "
+                    f"display_cycle={display_cycle}"
+                )
             except Exception as exc:
                 print(f"[EXITED-SYMBOLS] persist failed for {sym}: {exc}")
+        else:
+            print(
+                f"[EXITED-SYMBOLS] final persist skipped symbol={sym} "
+                f"session_present={bool(sid)} collection_present={coll is not None}"
+            )
 
         self._persist_exit_trading_log(doc)
         return doc
@@ -1410,6 +1452,11 @@ class AutoTrader:
         try:
             doc = coll.find_one({"session_id": sid, "symbol": sym})
             if doc and str(doc.get("status") or "").upper() in {"EXITED", "RMS_EXITED", "CLOSED"}:
+                print(
+                    f"[EXITED-SYMBOLS] found closed symbol session={sid} symbol={sym} "
+                    f"status={doc.get('status')} reason={doc.get('exit_reason')} "
+                    f"realized={doc.get('realized_pnl')} unrealized={doc.get('unrealized_pnl')}"
+                )
                 return doc
         except Exception as exc:
             print(f"[EXITED-SYMBOLS] lookup failed for {sym}: {exc}")
@@ -1448,6 +1495,11 @@ class AutoTrader:
         pre_exit = ctx.get("pre_exit_position") or self._snapshot_position_for_exit(sym)
         entry_price = float(pre_exit.get("entry_price") or 0.0)
         entry_side = pre_exit.get("side") or ("BUY" if exit_side == "SELL" else "SELL")
+        print(
+            f"[EXIT-FINALIZE] start symbol={sym} action={action_type} reason={exit_reason} "
+            f"entry_side={entry_side} exit_side={exit_side} qty={exit_qty} "
+            f"entry={entry_price:.2f} exit={exit_price:.2f} order_id={ctx.get('order_id')}"
+        )
 
         pnl = self._close_position(
             self.session,
@@ -1491,6 +1543,11 @@ class AutoTrader:
             exit_order_status="FILLED",
         )
         self._persist_paper_state_snapshot(event=f"exit:{sym}")
+        print(
+            f"[EXIT-FINALIZE] done symbol={sym} reason={exit_reason} "
+            f"realized={exit_doc.get('realized_pnl')} unrealized={exit_doc.get('unrealized_pnl')} "
+            f"trading_log_cycle={exit_doc.get('display_cycle')}"
+        )
         return exit_doc
 
     # ---------- TIME HELPERS ----------
@@ -1981,6 +2038,7 @@ class AutoTrader:
     def _get_symbol_unrealized_pnl(self, symbol: str) -> float:
         symbol = symbol.upper().replace("-EQ", "")
         if symbol in self._exited_symbols or self._get_exited_symbol_doc(symbol):
+            print(f"[PNL-GUARD] {symbol}: exited symbol -> unrealized_pnl forced to 0.00")
             return 0.0
 
         with self.live_pnl_lock:
