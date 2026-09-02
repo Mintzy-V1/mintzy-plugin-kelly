@@ -1637,8 +1637,8 @@ class AutoTrader:
     def _get_live_price_redis(self, symbol: str, candle: str) -> Optional[float]:
         """
         Shared LTP for all accounts: GET price:ltp:{SYM}.NS:{date}:{HHMM}.
-        First caller SET NX after Upstox fetch; others only read. TTL 90 min.
-        /predict does not write this key. UI still uses curr_price as before.
+        Written by csv15m (09:30–10:15, …) and /predict append (10:30, 11:45, …) via SET NX.
+        First trader caller after a miss also SET NX; losers must not use their own fetch.
         """
         t_ltp_sym = time.time()
         redis_client = getattr(self.market_client, "redis_client", None)
@@ -1701,10 +1701,23 @@ class AutoTrader:
                 f"[LTP SHARED] SET NX {redis_key} price={live:.4f} created={bool(created)}"
             )
             if not created:
-                cached = redis_client.get(redis_key)
-                val = self._parse_shared_ltp(cached)
-                if val is not None:
-                    return val
+                for _ in range(12):
+                    cached = redis_client.get(redis_key)
+                    val = self._parse_shared_ltp(cached)
+                    if val is not None:
+                        elapsed_ltp = round(time.time() - t_ltp_sym, 3)
+                        print(
+                            f"[LTP SHARED] winner price after SET NX lost "
+                            f"{redis_key} price={val:.4f}"
+                        )
+                        print(f"[TIMING] LTP_PER_SYMBOL {symbol:<15} {elapsed_ltp:>7.3f}s  source=SHARED_LTP")
+                        return val
+                    time.sleep(0.15)
+                print(
+                    f"[LTP SHARED] SET NX lost and GET empty — refusing local fetch "
+                    f"for {redis_key}"
+                )
+                return None
             elapsed_ltp = round(time.time() - t_ltp_sym, 3)
             print(f"[TIMING] LTP_PER_SYMBOL {symbol:<15} {elapsed_ltp:>7.3f}s  source=SHARED_LTP")
             return live
