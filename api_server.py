@@ -134,6 +134,7 @@ DB_CONNECTED = False
 sessions_collection = None
 logs_collection = None
 pyramid_pnls_collection = None
+exited_symbols_collection = None
 try:
     mongo_client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=3000)
     mongo_db = mongo_client[MONGO_DB_NAME]
@@ -141,6 +142,19 @@ try:
     logs_collection = mongo_db["plugin_logs"]
     trading_logs_collection = mongo_db["trading_logs"]
     pyramid_pnls_collection = mongo_client[MONGO_CONFIG_DB_NAME]["pyramid_pnls"]
+    exited_symbols_collection = mongo_client[MONGO_CONFIG_DB_NAME]["exited_symbols"]
+    try:
+        exited_symbols_collection.create_index(
+            [("session_id", 1), ("symbol", 1)],
+            unique=True,
+            name="uniq_session_symbol_exit",
+        )
+        exited_symbols_collection.create_index(
+            [("session_id", 1), ("status", 1)],
+            name="idx_session_exit_status",
+        )
+    except Exception as index_exc:
+        logger.warning("exited_symbols index ensure failed (%s)", index_exc)
 
     # Force server selection to verify connectivity
     mongo_client.admin.command('ping')
@@ -155,6 +169,7 @@ try:
 except Exception as exc:
     logger.warning("MongoDB persistence unavailable (%s)", exc)
     pyramid_pnls_collection = None
+    exited_symbols_collection = None
 
 def _limit_rows(rows: List[Dict[str, Any]], limit: int) -> List[Dict[str, Any]]:
     if not isinstance(limit, int) or limit <= 0:
