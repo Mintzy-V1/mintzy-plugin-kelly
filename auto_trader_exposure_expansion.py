@@ -5142,6 +5142,10 @@ class AutoTrader:
                     self._sleep_until_next_candle(candle)
                     continue
 
+                if self.stop_event.is_set():
+                    print(f"[SKIP] Stop requested — skipping candle {candle_key}")
+                    break
+
                 #  LOCK CANDLE IMMEDIATELY (IMPORTANT)
                 self._last_executed_candle = candle_key
 
@@ -6261,6 +6265,7 @@ class AutoTrader:
                 continue
 
     def shutdown(self):
+        self.stop_event.set()
         print("[SHUTDOWN] Paper stop — applying capital pyramid update (no square-off)...")
         try:
             self._pyramid_handoff_result = self._apply_capital_pyramid_on_stop()
@@ -6288,7 +6293,6 @@ class AutoTrader:
                 self._csv_logger.stop()
             except Exception as e:
                 print(f"[SHUTDOWN] AsyncCsvLogger stop failed: {e}")
-        self.stop_event.set()
 
 
         
