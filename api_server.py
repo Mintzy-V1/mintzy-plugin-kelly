@@ -2829,7 +2829,7 @@ async def _finalize_stop_simulation_response(
     Apply session store / Mongo updates after simulation worker stop + pyramid.
     Returns the same payload shape as the legacy synchronous stop-simulation endpoint.
     """
-    live_allowed = bool(pyramid_handoff.get("live_allowed", True))
+    live_allowed = bool(pyramid_handoff.get("live_allowed", False))
     post_restore_configuration_id = (
         sessions_store.get(session_id, {}).get("configuration_id")
         or (db_record or {}).get("configuration_id")
@@ -2936,7 +2936,7 @@ async def _finalize_stop_simulation_response(
     response_payload = {
         "success": True,
         "ready": True,
-        "live_allowed": True,
+        "live_allowed": live_allowed,
         "pyramid": pyramid_handoff,
         "message": "Simulation stopped; session remains authenticated",
         "session_id": session_id,
