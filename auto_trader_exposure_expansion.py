@@ -2747,6 +2747,7 @@ class AutoTrader:
         symbols_for_live=None,
         removed_symbols=None,
     ) -> dict:
+        """Build pyramid handoff payload. live_allowed=True only on successful pyramid apply."""
         return {
             "applied": applied,
             "live_allowed": live_allowed,
@@ -3251,13 +3252,15 @@ class AutoTrader:
     def _apply_capital_pyramid_on_stop(self) -> dict:
         if getattr(self, "_pyramid_applied", False):
             print("[PYRAMID] Already applied — skipping duplicate stop")
-            cached = getattr(self, "_pyramid_handoff_result", None)
+            cached = getattr(self, "_pyramid_handoff_result", None) or getattr(
+                self, "_pyramid_handoff_result_cache", None
+            )
             if cached:
                 return cached
             return self._build_pyramid_handoff_result(
                 applied=True,
-                live_allowed=True,
-                reason="already_applied",
+                live_allowed=False,
+                reason="already_applied_no_handoff",
             )
 
         configuration_id = getattr(self, "configuration_id", None)
@@ -3265,7 +3268,7 @@ class AutoTrader:
             print("[PYRAMID] configuration_id missing — skipping capital pyramid update")
             return self._build_pyramid_handoff_result(
                 applied=False,
-                live_allowed=True,
+                live_allowed=False,
                 reason="configuration_id_missing",
             )
 
@@ -3273,7 +3276,7 @@ class AutoTrader:
         if not config_doc:
             return self._build_pyramid_handoff_result(
                 applied=False,
-                live_allowed=True,
+                live_allowed=False,
                 reason="configuration_not_found",
             )
 
@@ -3282,7 +3285,7 @@ class AutoTrader:
             print(f"[PYRAMID] configuration symbols not found for {configuration_id}")
             return self._build_pyramid_handoff_result(
                 applied=False,
-                live_allowed=True,
+                live_allowed=False,
                 reason="configuration_symbols_missing",
             )
 
@@ -3292,7 +3295,7 @@ class AutoTrader:
             print("[PYRAMID] No symbols with capital to evaluate — aborting update")
             return self._build_pyramid_handoff_result(
                 applied=False,
-                live_allowed=True,
+                live_allowed=False,
                 reason="no_symbols_to_evaluate",
             )
 
@@ -3306,7 +3309,7 @@ class AutoTrader:
             print("[PYRAMID] Skipping capital pyramid — real broker/session cash unavailable")
             return self._build_pyramid_handoff_result(
                 applied=False,
-                live_allowed=True,
+                live_allowed=False,
                 reason="broker_cash_unavailable",
             )
 
@@ -3547,7 +3550,7 @@ class AutoTrader:
             result = self._finish_pyramid_handoff(
                 self._build_pyramid_handoff_result(
                     applied=True,
-                    live_allowed=len(symbols_for_live) > 0,
+                    live_allowed=bool(symbols_for_live),
                     reason="ok" if symbols_for_live else "no_symbols_for_live",
                     profitable_count=len(symbols_for_live),
                     symbols_for_live=symbols_for_live,
@@ -3561,7 +3564,7 @@ class AutoTrader:
         return self._finish_pyramid_handoff(
             self._build_pyramid_handoff_result(
                 applied=False,
-                live_allowed=len(symbols_for_live) > 0,
+                live_allowed=False,
                 reason="mongo_save_failed",
                 profitable_count=len(symbols_for_live),
                 symbols_for_live=symbols_for_live,
@@ -6279,7 +6282,7 @@ class AutoTrader:
             traceback.print_exc()
             self._pyramid_handoff_result = self._build_pyramid_handoff_result(
                 applied=False,
-                live_allowed=True,
+                live_allowed=False,
                 reason="pyramid_exception",
             )
         

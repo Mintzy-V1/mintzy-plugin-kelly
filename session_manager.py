@@ -26,6 +26,15 @@ PYRAMID_RESULT_TTL = 600
 STOP_JOB_PREFIX = "autotrader:stop_job:"
 STOP_JOB_TTL = 600
 
+# Live handoff is blocked unless pyramid sets live_allowed=True explicitly.
+_PYRAMID_HANDOFF_BLOCKED = {
+    "applied": False,
+    "live_allowed": False,
+    "reason": "pyramid_not_run",
+    "profitable_count": 0,
+    "symbols_for_live": [],
+}
+
 
 
 def _signal_trader_stop(trader, stop_event, session_id: str, reason: str) -> None:
@@ -299,13 +308,7 @@ def _trader_worker(
 
             handoff = getattr(trader, "_pyramid_handoff_result", None)
             if handoff is None:
-                handoff = {
-                    "applied": False,
-                    "live_allowed": True,
-                    "reason": "pyramid_not_run",
-                    "profitable_count": 0,
-                    "symbols_for_live": [],
-                }
+                handoff = dict(_PYRAMID_HANDOFF_BLOCKED)
             if exit_redis_client:
                 try:
                     exit_redis_client.setex(
@@ -362,13 +365,7 @@ def _trader_worker(
             if stop_event.is_set():
                 try:
                     if handoff is None:
-                        handoff = {
-                            "applied": False,
-                            "live_allowed": True,
-                            "reason": "pyramid_not_run",
-                            "profitable_count": 0,
-                            "symbols_for_live": [],
-                        }
+                        handoff = dict(_PYRAMID_HANDOFF_BLOCKED)
                     SessionManager.complete_stop_job(
                         session_id,
                         handoff,
@@ -522,10 +519,14 @@ class SessionManager:
             status="completed",
             phase="done",
             completed_at=time.time(),
-            live_allowed=bool(handoff.get("live_allowed", True)),
+            live_allowed=bool(handoff.get("live_allowed", False)),
             pyramid=handoff,
             simulation_stop=simulation_stop,
-            trading_status="simulation_stopped" if simulation_stop else "stopped",
+            trading_status=(
+                "simulation_stopped"
+                if simulation_stop and bool(handoff.get("live_allowed", False))
+                else "stopped"
+            ),
         )
         print(
             f"[SessionManager] Stop job completed for {session_id} "
@@ -1139,13 +1140,7 @@ class SessionManager:
                 cls.fail_stop_job(session_id, "Worker did not exit in time")
                 return False
         if stopped:
-            handoff = cls.read_pyramid_handoff_result(session_id) or {
-                "applied": False,
-                "live_allowed": True,
-                "reason": "pyramid_not_run",
-                "profitable_count": 0,
-                "symbols_for_live": [],
-            }
+            handoff = cls.read_pyramid_handoff_result(session_id) or dict(_PYRAMID_HANDOFF_BLOCKED)
             cls.complete_stop_job(session_id, handoff, simulation_stop=True)
         return stopped
     
