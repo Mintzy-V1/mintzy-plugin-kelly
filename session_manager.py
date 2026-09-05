@@ -130,7 +130,7 @@ def _trader_worker(
         mongo_client = MongoClient(mongo_uri, serverSelectionTimeoutMS=5000)
         mongo_db = mongo_client[mongo_db_name]
         trading_logs_collection = mongo_db[trading_logs_collection_name]
-        config_db_name = mongo_config_db_name or os.environ.get("MONGO_CONFIG_DB_NAME") or mongo_db_name
+        config_db_name = mongo_config_db_name or os.environ.get("MONGO_CONFIG_DB_NAME") or "test"
         os.environ["MONGO_CONFIG_DB_NAME"] = config_db_name
         print(
             f"[Worker-{session_id}] Mongo DBs — sessions/logs: {mongo_db_name}, "
