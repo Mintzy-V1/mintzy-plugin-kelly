@@ -2310,8 +2310,21 @@ async def start_trading(config: TradingConfig ,x_plugin_api_key: str = Header(No
         worker_started_perf = time.perf_counter()
         is_live_start = config.strategy != "B"
         if is_live_start:
-            cleared = SessionManager.ensure_worker_stopped(session_id, timeout=90)
-            if not cleared:
+            prep = SessionManager.prepare_for_live_start(session_id, timeout=90)
+            if prep == SessionManager.LiveStartPrepResult.LIVE_ALREADY_RUNNING:
+                print(
+                    f"[START-TRADING-DEBUG] Live start idempotent — worker already running for {session_id}"
+                )
+                return {
+                    "success": True,
+                    "message": "Trading already active on plugin",
+                    "session_id": session_id,
+                    "total_allocated": total_allocated,
+                    "free_cash": free_cash,
+                    "symbols": [s.symbol for s in config.symbols],
+                    "already_running": True,
+                }
+            if prep == SessionManager.LiveStartPrepResult.NOT_CLEARED:
                 raise HTTPException(
                     status_code=503,
                     detail=(
@@ -2334,20 +2347,26 @@ async def start_trading(config: TradingConfig ,x_plugin_api_key: str = Header(No
             if "already running" in err_text.lower():
                 worker_status = SessionManager.get_session_status(session_id)
                 if is_live_start:
-                    print(
-                        f"[START-TRADING-DEBUG] Live start blocked by stale worker for {session_id} "
-                        "— forcing cleanup and retrying once"
-                    )
-                    if SessionManager.ensure_worker_stopped(session_id, timeout=30):
-                        _spawn_worker()
-                    else:
-                        raise HTTPException(
-                            status_code=503,
-                            detail=(
-                                "Could not replace the previous worker for live trading. "
-                                "Retry in a few seconds."
-                            ),
+                    if worker_status and worker_status.get("is_alive"):
+                        print(
+                            f"[START-TRADING-DEBUG] Live start idempotent — worker alive for {session_id}"
                         )
+                        return {
+                            "success": True,
+                            "message": "Trading already active on plugin",
+                            "session_id": session_id,
+                            "total_allocated": total_allocated,
+                            "free_cash": free_cash,
+                            "symbols": [s.symbol for s in config.symbols],
+                            "already_running": True,
+                        }
+                    raise HTTPException(
+                        status_code=503,
+                        detail=(
+                            "Could not start live trading — worker registry conflict. "
+                            "Retry in a few seconds."
+                        ),
+                    )
                 elif worker_status and worker_status.get("is_alive"):
                     if is_simulation_start:
                         _sim_plugin_log(
