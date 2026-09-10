@@ -21,6 +21,7 @@ import threading
 import logging
 import traceback
 from trading_snapshot import insert_trading_snapshot
+from utils.session_symbols import filter_broker_positions_for_session
 
 # ====================================================================
 from trading_state import trading_snapshot
@@ -2290,23 +2291,35 @@ class AutoTrader:
             print(f"[EOD MERGE ERROR] {e}")
         
         print("\n" + "=" * 80)
-        print("  MARKET CLOSE (3:00 PM IST) - EXITING ALL POSITIONS")
+        print("  MARKET CLOSE (3:00 PM IST) - EXITING SESSION POSITIONS")
         print("=" * 80)
         
-        self.alerts.notify("3:00 PM IST - Initiating exit of all positions")
+        self.alerts.notify("3:00 PM IST - Initiating exit of session positions")
         self._notify_eod_exit_status_to_api(reason="MARKET_CLOSE_15:00_IST")
         
         # Get current broker positions
         with self.broker_pos_lock:
             self._broker_positions_cache = self._get_broker_positions()
             broker_positions = list(self._broker_positions_cache or [])
+
+        session_id = getattr(self, "ui_session_id", None) or getattr(self, "session_id", None)
+        redis_client = getattr(self.market_client, "redis_client", None)
+        broker_positions = filter_broker_positions_for_session(
+            broker_positions,
+            session_id,
+            redis_client,
+            fallback_symbols=list((self.symbol_allocations or {}).keys()),
+            on_skip=lambda sym: self.alerts.notify(
+                f"EOD skip {sym} (not a session symbol)"
+            ),
+        )
         
         if not broker_positions:
-            print("[INFO]  No open positions to exit")
-            self.alerts.notify(" No open positions - Auto trader stopped")
+            print("[INFO]  No session positions to exit")
+            self.alerts.notify(" No session positions to exit - Auto trader stopped")
             return True
         
-        print(f"[INFO] Found {len(broker_positions)} position(s) to exit")
+        print(f"[INFO] Found {len(broker_positions)} session position(s) to exit")
 
         eod_exit_records = {}
         for pos in broker_positions:
