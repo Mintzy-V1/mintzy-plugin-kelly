@@ -811,7 +811,8 @@ def get_live_pnl(session_id: str, x_plugin_api_key: str = Header(None)):
         return {"success": False, "error": "Redis unavailable"}
 
     try:
-        raw = _rms_redis.get(f"live_pnl:{session_id}")
+        from utils.redis_keys import live_pnl_key
+        raw = _rms_redis.get(live_pnl_key(session_id))
     except Exception as e:
         return {"success": False, "error": f"Redis error: {e}"}
 
@@ -1284,7 +1285,8 @@ def drain_rms_exited_symbols(session_id: str) -> list:
     """
     if not _rms_redis or not session_id:
         return []
-    key = f"autotrader:rms_exited:{session_id}"
+    from utils.redis_keys import rms_exited_key
+    key = rms_exited_key(session_id)
     removed = []
     try:
         while True:
@@ -1324,7 +1326,8 @@ def sync_exit_status_from_redis(session_id: str) -> Optional[Dict[str, Any]]:
     """
     if not _rms_redis or not session_id:
         return None
-    key = f"autotrader:exit_status:{session_id}"
+    from utils.redis_keys import exit_status_key
+    key = exit_status_key(session_id)
     try:
         raw = _rms_redis.get(key)
         if not raw:
