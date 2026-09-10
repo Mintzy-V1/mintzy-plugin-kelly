@@ -11,6 +11,7 @@ import os
 import logging
 import random
 import time
+import traceback
 
 from datetime import datetime
 import json
@@ -35,7 +36,7 @@ import threading
 import hashlib
 import base64
 from trading_snapshot import insert_trading_snapshot
-from session_manager import SessionManager
+from session_manager import SessionManager, LiveStartPrepResult
 
 from trading_state import trading_snapshot
 print("API snapshot id:", id(trading_snapshot))
@@ -2311,7 +2312,7 @@ async def start_trading(config: TradingConfig ,x_plugin_api_key: str = Header(No
         is_live_start = config.strategy != "B"
         if is_live_start:
             prep = SessionManager.prepare_for_live_start(session_id, timeout=90)
-            if prep == SessionManager.LiveStartPrepResult.LIVE_ALREADY_RUNNING:
+            if prep == LiveStartPrepResult.LIVE_ALREADY_RUNNING:
                 print(
                     f"[START-TRADING-DEBUG] Live start idempotent — worker already running for {session_id}"
                 )
@@ -2324,7 +2325,7 @@ async def start_trading(config: TradingConfig ,x_plugin_api_key: str = Header(No
                     "symbols": [s.symbol for s in config.symbols],
                     "already_running": True,
                 }
-            if prep == SessionManager.LiveStartPrepResult.NOT_CLEARED:
+            if prep == LiveStartPrepResult.NOT_CLEARED:
                 raise HTTPException(
                     status_code=503,
                     detail=(
@@ -2332,6 +2333,10 @@ async def start_trading(config: TradingConfig ,x_plugin_api_key: str = Header(No
                         "Wait a few seconds and retry live start."
                     ),
                 )
+            print(
+                f"[START-TRADING-DEBUG] prepare_for_live_start result={prep} "
+                f"session={session_id} gunicorn_pid={os.getpid()}"
+            )
 
         def _spawn_worker():
             SessionManager.start_session(
@@ -2388,6 +2393,10 @@ async def start_trading(config: TradingConfig ,x_plugin_api_key: str = Header(No
                     SessionManager.ensure_worker_stopped(session_id, timeout=30)
                     _spawn_worker()
             else:
+                print(
+                    f"[START-TRADING-ERROR] RuntimeError during spawn session={session_id} "
+                    f"strategy={config.strategy} gunicorn_pid={os.getpid()}: {runtime_err!r}"
+                )
                 raise
 
         if is_simulation_start:
@@ -2423,6 +2432,10 @@ async def start_trading(config: TradingConfig ,x_plugin_api_key: str = Header(No
     except HTTPException:
         raise
     except Exception as e:
+        print(
+            f"[START-TRADING-ERROR] session={session_id} strategy={getattr(config, 'strategy', '?')} "
+            f"gunicorn_pid={os.getpid()}: {e!r}\n{traceback.format_exc()}"
+        )
         raise HTTPException(
             status_code=500,
             detail=f"Failed to start trading: {str(e)}"

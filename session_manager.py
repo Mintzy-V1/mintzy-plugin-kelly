@@ -907,7 +907,14 @@ class SessionManager:
     @classmethod
     def start_session(cls, session_id: str, session_doc: dict, trading_logs_collection):
         """Start a new trading session in an isolated process"""
-        
+        gunicorn_pid = os.getpid()
+        redis_pid_before = cls._get_redis_pid(session_id)
+        worker_keys = list(cls._workers.keys())
+        print(
+            f"[SessionManager] start_session ENTER session={session_id} "
+            f"gunicorn_pid={gunicorn_pid} local_workers={worker_keys} redis_pid={redis_pid_before}"
+        )
+
         # Start monitor if not running
         cls._start_monitor()
 
@@ -929,8 +936,21 @@ class SessionManager:
             raise RuntimeError(f"Session {session_id} is already running")
         
         # Check worker limit
-        active_workers = sum(1 for w in cls._workers.values() if w.is_alive())
+        worker_states = {
+            sid: (w.process.pid, w.is_alive())
+            for sid, w in cls._workers.items()
+        }
+        active_workers = sum(1 for _, alive in worker_states.values() if alive)
+        print(
+            f"[SessionManager] start_session worker check session={session_id} "
+            f"active_workers={active_workers} max_workers={cls.MAX_WORKERS} "
+            f"worker_states={worker_states}"
+        )
         if active_workers >= cls.MAX_WORKERS:
+            print(
+                f"[SessionManager] start_session BLOCKED session={session_id} "
+                f"MAX_WORKERS reached ({active_workers}/{cls.MAX_WORKERS})"
+            )
             raise RuntimeError(
                 f"Maximum concurrent sessions ({cls.MAX_WORKERS}) reached. "
                 f"Stop a session or increase MAX_TRADER_WORKERS environment variable."
@@ -945,11 +965,22 @@ class SessionManager:
         
         for s in raw_symbols:
             if not isinstance(s, dict):
+                print(
+                    f"[SessionManager] start_session skipping non-dict symbol entry "
+                    f"session={session_id} type={type(s).__name__} value={s!r}"
+                )
                 continue
             
             sym = s.get("symbol")
-            cap = float(s.get("capital", 0))
-            sl = float(s.get("stop_loss", 0.02))
+            try:
+                cap = float(s.get("capital", 0))
+                sl = float(s.get("stop_loss", 0.02))
+            except (TypeError, ValueError) as parse_err:
+                print(
+                    f"[SessionManager] start_session symbol parse failed session={session_id} "
+                    f"symbol={sym!r} entry={s!r}: {parse_err!r}"
+                )
+                raise
             
             if sym:
                 symbols.append(sym)
@@ -959,6 +990,10 @@ class SessionManager:
                 }
         
         if not symbols:
+            print(
+                f"[SessionManager] start_session BLOCKED session={session_id} "
+                f"empty symbols raw_count={len(raw_symbols)} raw_symbols={raw_symbols!r}"
+            )
             raise RuntimeError("CRITICAL: Empty symbols list")
         
         print(f"[SessionManager] Starting session {session_id}")
@@ -1024,7 +1059,14 @@ class SessionManager:
         )
         
         # Start process
-        process.start()
+        try:
+            process.start()
+        except Exception as spawn_err:
+            print(
+                f"[SessionManager] process.start() failed session={session_id} "
+                f"gunicorn_pid={gunicorn_pid}: {spawn_err!r}\n{traceback.format_exc()}"
+            )
+            raise
 
         try:
             pid_key = f"{cls.REDIS_KEY_PREFIX}{session_id}"
@@ -1365,3 +1407,7 @@ class SessionManager:
             cls._monitor_thread.join(timeout=5)
         
         print("[SessionManager] All sessions stopped")
+
+
+# Backward compat for code that references SessionManager.LiveStartPrepResult
+SessionManager.LiveStartPrepResult = LiveStartPrepResult
