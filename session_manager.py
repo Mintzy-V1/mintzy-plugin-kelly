@@ -19,6 +19,21 @@ from broker_angle import BrokerConnector
 from live_ltp_ws import LiveLTPStream
 import signal
 
+from utils.redis_keys import (
+    SESSION_META_SUFFIX,
+    SESSION_PREFIX,
+    SESSION_REDIS_TTL,
+    exit_request_key,
+    exit_result_key,
+    pyramid_result_key,
+    session_cleanup_keys,
+    session_meta_key,
+    session_pid_key,
+    simulation_stop_key,
+    stop_job_key,
+)
+from utils.eod_exit import log_eod_config
+
 SIMULATION_STOP_PREFIX = "autotrader:simulation_stop:"
 SIMULATION_STOP_TTL = 300
 PYRAMID_RESULT_PREFIX = "autotrader:pyramid_result:"
@@ -210,6 +225,16 @@ def _trader_worker(
         trader.initial_allocations = allocations
         trader.configuration_id = configuration_id
         trader.simulation_logs = strategy == "B"
+
+        if strategy != "B" and not allocations:
+            health_queue.put({
+                "session_id": session_id,
+                "status": "error",
+                "error": "Live start without symbol allocations",
+            })
+            return
+
+        log_eod_config()
         if leverage_multiplier is not None:
             try:
                 trader.leverage_multiplier = float(leverage_multiplier)
@@ -271,8 +296,8 @@ def _trader_worker(
             print(f"[Worker-{session_id}] LiveLTPStream failed to start: {e}")
 
         # Monitor for stop signal AND single-symbol exit requests
-        exit_queue_key = f"autotrader:exit_request:{session_id}"
-        sim_stop_key = f"{SIMULATION_STOP_PREFIX}{session_id}"
+        exit_queue_key = exit_request_key(session_id)
+        sim_stop_key = simulation_stop_key(session_id)
         while trader_thread.is_alive() and not stop_event.is_set():
             if exit_redis_client:
                 try:
@@ -294,7 +319,7 @@ def _trader_worker(
                         print(f"[Worker-{session_id}] Exit request received for symbol: {exit_symbol}")
                         result = trader.exit_single_position(exit_symbol)
                         # Push result back to Redis for the API to read
-                        result_key = f"autotrader:exit_result:{session_id}:{exit_symbol}"
+                        result_key = exit_result_key(session_id, exit_symbol)
                         exit_redis_client.setex(result_key, 60, json.dumps(result))
                         print(f"[Worker-{session_id}] Exit result for {exit_symbol}: {result}")
                 except Exception as e:
@@ -323,7 +348,7 @@ def _trader_worker(
             if exit_redis_client:
                 try:
                     exit_redis_client.setex(
-                        f"{PYRAMID_RESULT_PREFIX}{session_id}",
+                        pyramid_result_key(session_id),
                         PYRAMID_RESULT_TTL,
                         json.dumps(handoff),
                     )
@@ -344,7 +369,7 @@ def _trader_worker(
         simulation_stop = False
         try:
             if exit_redis_client:
-                sim_key = f"{SIMULATION_STOP_PREFIX}{session_id}"
+                sim_key = simulation_stop_key(session_id)
                 simulation_stop = bool(exit_redis_client.get(sim_key))
                 if simulation_stop:
                     exit_redis_client.delete(sim_key)
@@ -448,9 +473,9 @@ class SessionManager:
         """Convenience accessor for MarketClient's Redis connection."""
         return cls._market_client.redis_client
 
-    REDIS_KEY_PREFIX = "autotrader:session:"
-    REDIS_META_SUFFIX = ":meta"
-    SESSION_REDIS_TTL = 86400
+    REDIS_KEY_PREFIX = SESSION_PREFIX
+    REDIS_META_SUFFIX = SESSION_META_SUFFIX
+    SESSION_REDIS_TTL = SESSION_REDIS_TTL
     SIMULATION_STOP_PREFIX = SIMULATION_STOP_PREFIX
     SIMULATION_STOP_TTL = SIMULATION_STOP_TTL
     PYRAMID_RESULT_PREFIX = PYRAMID_RESULT_PREFIX
@@ -460,7 +485,7 @@ class SessionManager:
 
     @classmethod
     def _stop_job_key(cls, session_id: str) -> str:
-        return f"{cls.STOP_JOB_PREFIX}{session_id}"
+        return stop_job_key(session_id)
 
     @classmethod
     def read_stop_job(cls, session_id: str) -> Optional[Dict[str, Any]]:
@@ -559,7 +584,7 @@ class SessionManager:
 
     @classmethod
     def _pyramid_result_key(cls, session_id: str) -> str:
-        return f"{cls.PYRAMID_RESULT_PREFIX}{session_id}"
+        return pyramid_result_key(session_id)
 
     @classmethod
     def read_pyramid_handoff_result(cls, session_id: str):
@@ -581,7 +606,7 @@ class SessionManager:
 
     @classmethod
     def _simulation_stop_key(cls, session_id: str) -> str:
-        return f"{cls.SIMULATION_STOP_PREFIX}{session_id}"
+        return simulation_stop_key(session_id)
 
     @classmethod
     def _mark_simulation_stop(cls, session_id: str) -> bool:
@@ -693,14 +718,14 @@ class SessionManager:
     @classmethod
     def _get_redis_pid(cls, session_id: str) -> Optional[int]:
         try:
-            pid_str = cls._redis().get(f"{cls.REDIS_KEY_PREFIX}{session_id}")
+            pid_str = cls._redis().get(session_pid_key(session_id))
             return int(pid_str) if pid_str else None
         except Exception:
             return None
 
     @classmethod
     def _session_meta_key(cls, session_id: str) -> str:
-        return f"{cls.REDIS_KEY_PREFIX}{session_id}{cls.REDIS_META_SUFFIX}"
+        return session_meta_key(session_id)
 
     @classmethod
     def _get_session_worker_meta(cls, session_id: str) -> Optional[Dict[str, Any]]:
@@ -731,10 +756,7 @@ class SessionManager:
     @classmethod
     def _delete_session_redis_keys(cls, session_id: str) -> None:
         try:
-            cls._redis().delete(
-                f"{cls.REDIS_KEY_PREFIX}{session_id}",
-                cls._session_meta_key(session_id),
-            )
+            cls._redis().delete(*session_cleanup_keys(session_id))
         except Exception as e:
             print(f"[SessionManager] Redis delete failed for {session_id}: {e}")
 
@@ -1068,30 +1090,65 @@ class SessionManager:
             )
             raise
 
-        try:
-            pid_key = f"{cls.REDIS_KEY_PREFIX}{session_id}"
-            meta_key = cls._session_meta_key(session_id)
-            meta_symbols = [
-                (s or "").upper().replace("-EQ", "").strip()
-                for s in symbols
-                if s
-            ]
-            meta_payload = json.dumps({
-                "strategy": strategy,
-                "pid": process.pid,
-                "started_at": time.time(),
-                "symbols": meta_symbols,
-            })
-            pipe = cls._redis().pipeline()
-            pipe.setex(pid_key, cls.SESSION_REDIS_TTL, str(process.pid))
-            pipe.setex(meta_key, cls.SESSION_REDIS_TTL, meta_payload)
-            pipe.execute()
-            print(
-                f"[SessionManager] Redis mein save kiya — session={session_id} "
-                f"pid={process.pid} strategy={strategy} symbols={meta_symbols}"
+        meta_saved = False
+        last_redis_err = None
+        for attempt in range(3):
+            try:
+                redis_client = cls._redis()
+                if redis_client is None:
+                    raise RuntimeError("Redis client unavailable")
+
+                pid_key = session_pid_key(session_id)
+                meta_key = session_meta_key(session_id)
+                meta_symbols = [
+                    (s or "").upper().replace("-EQ", "").strip()
+                    for s in symbols
+                    if s
+                ]
+                meta_payload = json.dumps({
+                    "strategy": strategy,
+                    "pid": process.pid,
+                    "started_at": time.time(),
+                    "symbols": meta_symbols,
+                })
+                pipe = redis_client.pipeline()
+                pipe.setex(pid_key, cls.SESSION_REDIS_TTL, str(process.pid))
+                pipe.setex(meta_key, cls.SESSION_REDIS_TTL, meta_payload)
+                pipe.execute()
+                meta_saved = True
+                print(
+                    f"[SessionManager] Redis mein save kiya — session={session_id} "
+                    f"pid={process.pid} strategy={strategy} symbols={meta_symbols}"
+                )
+                break
+            except Exception as e:
+                last_redis_err = e
+                if attempt < 2:
+                    time.sleep(0.1 * (attempt + 1))
+
+        if not meta_saved:
+            e = last_redis_err or RuntimeError("Redis save failed")
+            print(f"[SessionManager] CRITICAL: Redis save failed: {e}")
+            strict_meta = os.environ.get("EOD_STRICT_REDIS_META", "false").lower() in (
+                "1", "true", "yes",
             )
-        except Exception as e:
-            print(f"[SessionManager] Redis save failed: {e}")
+            if strict_meta and strategy != "B":
+                print(
+                    f"[SessionManager] EOD_STRICT_REDIS_META — terminating worker "
+                    f"session={session_id} pid={process.pid}"
+                )
+                try:
+                    if process.is_alive():
+                        os.kill(process.pid, signal.SIGTERM)
+                        process.join(timeout=10)
+                        if process.is_alive():
+                            process.terminate()
+                            process.join(timeout=5)
+                except Exception as kill_err:
+                    print(f"[SessionManager] Worker terminate after Redis fail: {kill_err}")
+                raise RuntimeError(
+                    f"Redis meta save failed for live session {session_id}: {e}"
+                )
             
         # Register worker
         worker = WorkerProcess(session_id, process, stop_event, cls._health_queue)
@@ -1154,7 +1211,7 @@ class SessionManager:
             return True
 
         try:
-            pid_str = cls._redis().get(f"{cls.REDIS_KEY_PREFIX}{session_id}")
+            pid_str = cls._redis().get(session_pid_key(session_id))
             if not pid_str:
                 print(
                     f"[SessionManager] Signal-only: no local worker or Redis PID for {session_id} "
@@ -1185,7 +1242,7 @@ class SessionManager:
             print(f"[SessionManager] Local memory mein nahi mila Ã¢â‚¬â€ Redis check kar raha hoon...")
             
             try:
-                pid_str = cls._redis().get(f"{cls.REDIS_KEY_PREFIX}{session_id}")
+                pid_str = cls._redis().get(session_pid_key(session_id))
                 
                 if not pid_str:
                     print(f"[SessionManager] Ã¢ÂÅ’ Redis mein bhi nahi mila Ã¢â‚¬â€ session already stopped hoga")
@@ -1323,7 +1380,7 @@ class SessionManager:
         if not worker:
             # Check Redis for PID (cross-worker case)
             try:
-                pid_str = cls._redis().get(f"{cls.REDIS_KEY_PREFIX}{session_id}")
+                pid_str = cls._redis().get(session_pid_key(session_id))
                 if not pid_str:
                     return {
                         "success": False,
@@ -1339,7 +1396,7 @@ class SessionManager:
         
         # Push exit request to Redis queue
         try:
-            exit_queue_key = f"autotrader:exit_request:{session_id}"
+            exit_queue_key = exit_request_key(session_id)
             payload = json.dumps({"symbol": symbol.upper()})
             cls._redis().rpush(exit_queue_key, payload)
             # Set TTL on the queue key so it auto-cleans (5 minutes)
@@ -1348,7 +1405,7 @@ class SessionManager:
             print(f"[SessionManager] Ã¢Å“â€¦ Exit request pushed to Redis for {symbol}")
             
             # Wait briefly for the result (max 10 seconds)
-            result_key = f"autotrader:exit_result:{session_id}:{symbol.upper()}"
+            result_key = exit_result_key(session_id, symbol)
             for _ in range(20):  # 20 Ãƒâ€” 0.5s = 10s
                 time.sleep(0.5)
                 result_raw = cls._redis().get(result_key)
