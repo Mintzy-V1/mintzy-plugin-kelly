@@ -895,9 +895,9 @@ class AutoTrader:
 
             for p in data:
                 try:
-                    # Exit path must never square off CNC/DELIVERY/carry positions
+                    # Exit path must never square off CNC/DELIVERY/MIS/carry positions
                     product = str(p.get("producttype") or p.get("productType") or "").upper()
-                    if product not in ("INTRADAY", "MIS"):
+                    if product != "INTRADAY":
                         continue
 
                     net_qty = int(p.get("netqty", 0))
