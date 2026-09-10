@@ -1071,16 +1071,25 @@ class SessionManager:
         try:
             pid_key = f"{cls.REDIS_KEY_PREFIX}{session_id}"
             meta_key = cls._session_meta_key(session_id)
+            meta_symbols = [
+                (s or "").upper().replace("-EQ", "").strip()
+                for s in symbols
+                if s
+            ]
             meta_payload = json.dumps({
                 "strategy": strategy,
                 "pid": process.pid,
                 "started_at": time.time(),
+                "symbols": meta_symbols,
             })
             pipe = cls._redis().pipeline()
             pipe.setex(pid_key, cls.SESSION_REDIS_TTL, str(process.pid))
             pipe.setex(meta_key, cls.SESSION_REDIS_TTL, meta_payload)
             pipe.execute()
-            print(f"[SessionManager] Redis mein save kiya — session={session_id} pid={process.pid} strategy={strategy}")
+            print(
+                f"[SessionManager] Redis mein save kiya — session={session_id} "
+                f"pid={process.pid} strategy={strategy} symbols={meta_symbols}"
+            )
         except Exception as e:
             print(f"[SessionManager] Redis save failed: {e}")
             
