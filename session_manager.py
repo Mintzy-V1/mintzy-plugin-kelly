@@ -35,7 +35,10 @@ from utils.redis_keys import (
 from utils.eod_exit import log_eod_config
 
 SIMULATION_STOP_PREFIX = "autotrader:simulation_stop:"
-SIMULATION_STOP_TTL = 300
+# Must outlive the whole shutdown sequence (trader join + shutdown + square-off).
+# If it expires first the worker takes the plain-stop branch and marks the session
+# "stopped", which de-authenticates it and blocks the live start.
+SIMULATION_STOP_TTL = int(os.environ.get("SIMULATION_STOP_TTL", "1800"))
 PYRAMID_RESULT_PREFIX = "autotrader:pyramid_result:"
 PYRAMID_RESULT_TTL = 600
 STOP_JOB_PREFIX = "autotrader:stop_job:"
@@ -79,11 +82,16 @@ class WorkerProcess:
     """Wrapper for a trader process with health monitoring"""
     
     def __init__(self, session_id: str, process: Process, 
-                 stop_event: Event, health_queue: Queue):
+                 stop_event: Event, health_queue: Queue, strategy: str = None,
+                 symbols: list = None):
         self.session_id = session_id
         self.process = process
         self.stop_event = stop_event
         self.health_queue = health_queue
+        # Kept locally so a lost Redis meta key can't make a live worker look like
+        # paper and get killed, and so the EOD symbol scope survives a republish.
+        self.strategy = strategy
+        self.symbols = symbols or []
         self.last_heartbeat = time.time()
         self.started_at = time.time()
         
@@ -298,10 +306,14 @@ def _trader_worker(
         # Monitor for stop signal AND single-symbol exit requests
         exit_queue_key = exit_request_key(session_id)
         sim_stop_key = simulation_stop_key(session_id)
+        # Latched at detection time so a slow shutdown can never lose the fact
+        # that this was a simulation stop rather than a plain stop.
+        simulation_stop_latched = False
         while trader_thread.is_alive() and not stop_event.is_set():
             if exit_redis_client:
                 try:
                     if exit_redis_client.get(sim_stop_key):
+                        simulation_stop_latched = True
                         _signal_trader_stop(
                             trader, stop_event, session_id, "redis simulation_stop"
                         )
@@ -366,15 +378,29 @@ def _trader_worker(
                 print(f"[Worker-{session_id}] LiveLTPStream stop error: {e}")
 
 
-        simulation_stop = False
+        simulation_stop = simulation_stop_latched
         try:
             if exit_redis_client:
                 sim_key = simulation_stop_key(session_id)
-                simulation_stop = bool(exit_redis_client.get(sim_key))
-                if simulation_stop:
+                if exit_redis_client.get(sim_key):
+                    simulation_stop = True
                     exit_redis_client.delete(sim_key)
         except Exception as e:
             print(f"[Worker-{session_id}] Simulation stop flag check error: {e}")
+
+        # Third signal: a stop job only ever exists because a simulation stop was
+        # requested, so it still identifies the path if both Redis reads came up empty.
+        pending_stop_job = None
+        try:
+            pending_stop_job = SessionManager.read_stop_job(session_id)
+            if not simulation_stop and pending_stop_job and pending_stop_job.get("status") == "stopping":
+                simulation_stop = True
+                print(
+                    f"[Worker-{session_id}] Simulation stop inferred from pending stop job "
+                    "(flag missing or expired)"
+                )
+        except Exception as e:
+            print(f"[Worker-{session_id}] Stop job lookup error: {e}")
 
         if simulation_stop:
             health_queue.put({
@@ -738,12 +764,17 @@ class SessionManager:
             return None
 
     @classmethod
-    def _set_session_worker_meta(cls, session_id: str, strategy: str, pid: int) -> None:
+    def _set_session_worker_meta(cls, session_id: str, strategy: str, pid: int,
+                                 symbols: list = None) -> None:
         meta = {
             "strategy": strategy,
             "pid": pid,
             "started_at": time.time(),
         }
+        # session_symbols falls back to a broader set when this is absent, which
+        # would widen the EOD square-off beyond this session.
+        if symbols:
+            meta["symbols"] = list(symbols)
         try:
             cls._redis().setex(
                 cls._session_meta_key(session_id),
@@ -802,7 +833,23 @@ class SessionManager:
 
         if worker and worker.is_alive():
             local_pid = worker.process.pid
-            if redis_pid is None:
+            if redis_pid is None and worker.strategy and worker.strategy != "B":
+                # A live worker outliving its Redis keys means the keys were lost,
+                # not that a stop was requested. Restore them instead of killing it.
+                print(
+                    f"[SessionManager] Reconcile: live worker PID={local_pid} for {session_id} "
+                    "has no Redis entry — republishing keys instead of terminating"
+                )
+                try:
+                    cls._redis().setex(
+                        session_pid_key(session_id), cls.SESSION_REDIS_TTL, str(local_pid)
+                    )
+                    cls._set_session_worker_meta(
+                        session_id, worker.strategy, local_pid, symbols=worker.symbols
+                    )
+                except Exception as e:
+                    print(f"[SessionManager] Reconcile: failed to republish keys for {session_id}: {e}")
+            elif redis_pid is None:
                 print(
                     f"[SessionManager] Reconcile: local worker PID={local_pid} for {session_id} "
                     "but Redis entry cleared (cross-worker stop) — cleaning up"
@@ -880,11 +927,22 @@ class SessionManager:
         redis_pid = cls._get_redis_pid(session_id)
         meta = cls._get_session_worker_meta(session_id)
 
+        local_worker = cls._workers.get(session_id)
+        local_is_live = bool(
+            local_worker
+            and local_worker.is_alive()
+            and local_worker.strategy
+            and local_worker.strategy != "B"
+        )
+
         if redis_pid and cls._pid_alive(redis_pid):
-            if cls._is_live_worker_meta(meta):
+            # The local record is authoritative when Redis meta was evicted — without
+            # it an evicted key makes a live worker look like paper and it gets killed.
+            if cls._is_live_worker_meta(meta) or local_is_live:
                 print(
                     f"[SessionManager] prepare_for_live_start: LIVE_ALREADY_RUNNING "
-                    f"session={session_id} pid={redis_pid} strategy={meta.get('strategy') if meta else None}"
+                    f"session={session_id} pid={redis_pid} "
+                    f"strategy={(meta or {}).get('strategy') or (local_worker.strategy if local_worker else None)}"
                 )
                 return LiveStartPrepResult.LIVE_ALREADY_RUNNING
 
@@ -902,7 +960,7 @@ class SessionManager:
         worker = cls._workers.get(session_id)
         if worker and worker.is_alive():
             meta = cls._get_session_worker_meta(session_id)
-            if cls._is_live_worker_meta(meta):
+            if cls._is_live_worker_meta(meta) or local_is_live:
                 print(
                     f"[SessionManager] prepare_for_live_start: LIVE_ALREADY_RUNNING (local) "
                     f"session={session_id} pid={worker.process.pid}"
@@ -1045,8 +1103,38 @@ class SessionManager:
             daemon=False  # Not daemon - we want proper cleanup
         )
         
+        # Publish the strategy before the process exists. Writing it only after
+        # process.start() leaves a window in which a concurrent live start reads no
+        # meta, decides nothing is running, and spawns a second live worker.
+        reservation_symbols = [
+            (s or "").upper().replace("-EQ", "").strip()
+            for s in symbols
+            if s
+        ]
+        try:
+            cls._redis().setex(
+                session_meta_key(session_id),
+                cls.SESSION_REDIS_TTL,
+                json.dumps({
+                    "strategy": strategy,
+                    "pid": None,
+                    "started_at": time.time(),
+                    "symbols": reservation_symbols,
+                    "reserved": True,
+                }),
+            )
+        except Exception as reserve_err:
+            print(f"[SessionManager] Meta reservation failed for {session_id}: {reserve_err}")
+
         # Start process
-        process.start()
+        try:
+            process.start()
+        except Exception:
+            try:
+                cls._redis().delete(session_meta_key(session_id))
+            except Exception:
+                pass
+            raise
 
         meta_saved = False
         last_redis_err = None
@@ -1109,7 +1197,10 @@ class SessionManager:
                 )
             
         # Register worker
-        worker = WorkerProcess(session_id, process, stop_event, cls._health_queue)
+        worker = WorkerProcess(
+            session_id, process, stop_event, cls._health_queue,
+            strategy=strategy, symbols=reservation_symbols
+        )
         cls._workers[session_id] = worker
         
         print(f"[SessionManager] Session {session_id} started in process {process.pid}")
