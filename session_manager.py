@@ -1365,3 +1365,7 @@ class SessionManager:
             cls._monitor_thread.join(timeout=5)
         
         print("[SessionManager] All sessions stopped")
+
+
+# So api_server can use SessionManager.LiveStartPrepResult if needed
+SessionManager.LiveStartPrepResult = LiveStartPrepResult
