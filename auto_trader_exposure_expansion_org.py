@@ -4113,6 +4113,7 @@ class AutoTrader:
                                         "side": "NONE",
                                         "signal": "STOP-LOSS",
                                         "action": action_taken,
+                                        "qty": int(qty),
                                         "unrealized_pnl": symbol_unrealized_pnl,
                                         "symbol_unrealized_pnl": symbol_unrealized_pnl,
                                         "symbol_realized_pnl": symbol_realized_pnl,
@@ -4639,6 +4640,10 @@ class AutoTrader:
                 with self.pending_lock:
                     pending_syms = set(self.pending_orders.keys())
 
+                # Refresh broker positions after the order phase so ui_rows qty/side match fills.
+                with self.broker_pos_lock:
+                    self._broker_positions_cache = self._get_broker_positions()
+                    broker_positions = list(self._broker_positions_cache)
 
                 # ========== CONTINUE WITH HOLD POSITIONS ==========
                 for sym, info in signals.items(): 
@@ -4709,6 +4714,7 @@ class AutoTrader:
                         "side": side,
                         "signal": sig,
                         "action": action_taken,
+                        "qty": int(held_qty),
                         "unrealized_pnl": symbol_unrealized_pnl,
                         "symbol_unrealized_pnl": symbol_unrealized_pnl,
                         "symbol_realized_pnl": symbol_realized_pnl,
