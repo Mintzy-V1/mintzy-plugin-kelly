@@ -46,6 +46,8 @@ STOP_JOB_TTL = 600
 
 # Grace period for concurrent live-start when worker meta is missing (legacy / race).
 LIVE_START_WORKER_GRACE_SECONDS = int(os.environ.get("LIVE_START_WORKER_GRACE_SECONDS", "60"))
+# Max wait after SIGKILL when clearing paper/zombie workers (live-start prep path).
+WORKER_FORCE_KILL_WAIT_SECONDS = float(os.environ.get("WORKER_FORCE_KILL_WAIT_SECONDS", "10"))
 
 
 class LiveStartPrepResult:
@@ -809,6 +811,19 @@ class SessionManager:
         return False
 
     @classmethod
+    def _session_has_live_worker(cls, session_id: str) -> bool:
+        """True when a live (non-paper) trader worker must not be killed."""
+        meta = cls._get_session_worker_meta(session_id)
+        local_worker = cls._workers.get(session_id)
+        local_is_live = bool(
+            local_worker
+            and local_worker.is_alive()
+            and local_worker.strategy
+            and local_worker.strategy != "B"
+        )
+        return cls._is_live_worker_meta(meta) or local_is_live
+
+    @classmethod
     def _wait_for_pid_exit(cls, pid: int, timeout: float = 90.0) -> bool:
         deadline = time.time() + timeout
         while time.time() < deadline:
@@ -877,68 +892,93 @@ class SessionManager:
             cls._workers.pop(session_id, None)
 
     @classmethod
-    def _terminate_session_worker(cls, session_id: str, timeout: float = 90.0) -> bool:
-        """SIGTERM/SIGKILL session worker (local registry + Redis PID). Used for paper cleanup."""
+    def _terminate_session_worker(
+        cls, session_id: str, timeout: Optional[float] = None
+    ) -> bool:
+        """
+        Force-kill paper/zombie session workers (local registry + Redis PID).
+        Never kills a live (non-B) worker — returns False if one is active.
+        """
+        if timeout is None:
+            timeout = WORKER_FORCE_KILL_WAIT_SECONDS
+
+        if cls._session_has_live_worker(session_id):
+            print(
+                f"[SessionManager] _terminate_session_worker: refusing — live worker "
+                f"active for {session_id}"
+            )
+            return False
+
+        pids_to_kill: set[int] = set()
         worker = cls._workers.get(session_id)
-        if worker and worker.is_alive():
-            print(f"[SessionManager] _terminate_session_worker: signaling local worker {session_id}")
-            worker.stop_event.set()
-            worker.process.join(timeout=min(timeout, 60))
-            if worker.is_alive():
-                try:
-                    worker.process.terminate()
-                    worker.process.join(timeout=5)
-                except Exception:
-                    pass
-            cls._cleanup_worker(session_id)
+        if worker:
+            try:
+                if worker.process.is_alive():
+                    pids_to_kill.add(worker.process.pid)
+            except Exception:
+                pass
+            cls._workers.pop(session_id, None)
 
         redis_pid = cls._get_redis_pid(session_id)
-        if redis_pid and cls._pid_alive(redis_pid):
-            print(f"[SessionManager] _terminate_session_worker: SIGTERM PID={redis_pid} for {session_id}")
-            try:
-                os.kill(redis_pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-            if not cls._wait_for_pid_exit(redis_pid, timeout):
-                print(f"[SessionManager] _terminate_session_worker: SIGKILL PID={redis_pid} for {session_id}")
-                try:
-                    os.kill(redis_pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                cls._wait_for_pid_exit(redis_pid, 10)
+        if redis_pid is not None:
+            pids_to_kill.add(redis_pid)
 
         cls._delete_session_redis_keys(session_id)
 
+        for pid in pids_to_kill:
+            if not cls._pid_alive(pid):
+                continue
+            print(
+                f"[SessionManager] _terminate_session_worker: SIGKILL PID={pid} "
+                f"for {session_id}"
+            )
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+        for pid in pids_to_kill:
+            if cls._pid_alive(pid) and not cls._wait_for_pid_exit(pid, timeout):
+                print(
+                    f"[SessionManager] _terminate_session_worker: PID={pid} still alive "
+                    f"after {timeout}s for {session_id}"
+                )
+
         cls._reconcile_session_registry(session_id)
-        redis_pid = cls._get_redis_pid(session_id)
-        still_running = session_id in cls._workers or (
-            redis_pid is not None and cls._pid_alive(redis_pid)
-        )
+
+        still_running = session_id in cls._workers
+        if not still_running:
+            for pid in pids_to_kill:
+                if cls._pid_alive(pid):
+                    still_running = True
+                    break
+        if not still_running:
+            redis_pid = cls._get_redis_pid(session_id)
+            still_running = redis_pid is not None and cls._pid_alive(redis_pid)
+
         return not still_running
 
     @classmethod
-    def prepare_for_live_start(cls, session_id: str, timeout: float = 90.0) -> str:
+    def prepare_for_live_start(
+        cls, session_id: str, timeout: Optional[float] = None
+    ) -> str:
         """
         Before spawning a live worker: clear paper (B) only.
-        Never SIGTERM an existing live (non-B) worker — concurrent live starts are idempotent.
+        Never kills an existing live (non-B) worker — concurrent live starts are idempotent.
         """
+        if timeout is None:
+            timeout = WORKER_FORCE_KILL_WAIT_SECONDS
+
         cls._reconcile_session_registry(session_id)
 
         redis_pid = cls._get_redis_pid(session_id)
         meta = cls._get_session_worker_meta(session_id)
-
         local_worker = cls._workers.get(session_id)
-        local_is_live = bool(
-            local_worker
-            and local_worker.is_alive()
-            and local_worker.strategy
-            and local_worker.strategy != "B"
-        )
 
         if redis_pid and cls._pid_alive(redis_pid):
             # The local record is authoritative when Redis meta was evicted — without
             # it an evicted key makes a live worker look like paper and it gets killed.
-            if cls._is_live_worker_meta(meta) or local_is_live:
+            if cls._session_has_live_worker(session_id):
                 print(
                     f"[SessionManager] prepare_for_live_start: LIVE_ALREADY_RUNNING "
                     f"session={session_id} pid={redis_pid} "
@@ -948,7 +988,7 @@ class SessionManager:
 
             strategy = (meta or {}).get("strategy")
             print(
-                f"[SessionManager] prepare_for_live_start: terminating paper/stale worker "
+                f"[SessionManager] prepare_for_live_start: force-killing paper/stale worker "
                 f"session={session_id} pid={redis_pid} strategy={strategy or 'unknown'}"
             )
             if cls._terminate_session_worker(session_id, timeout):
@@ -959,8 +999,7 @@ class SessionManager:
 
         worker = cls._workers.get(session_id)
         if worker and worker.is_alive():
-            meta = cls._get_session_worker_meta(session_id)
-            if cls._is_live_worker_meta(meta) or local_is_live:
+            if cls._session_has_live_worker(session_id):
                 print(
                     f"[SessionManager] prepare_for_live_start: LIVE_ALREADY_RUNNING (local) "
                     f"session={session_id} pid={worker.process.pid}"
@@ -974,9 +1013,22 @@ class SessionManager:
         return LiveStartPrepResult.CLEAR
 
     @classmethod
-    def ensure_worker_stopped(cls, session_id: str, timeout: float = 90.0) -> bool:
-        """Block until no worker remains for this session (paper stop / full cleanup)."""
+    def ensure_worker_stopped(
+        cls, session_id: str, timeout: Optional[float] = None
+    ) -> bool:
+        """Force-clear paper/zombie workers for this session (never kills live workers)."""
+        if timeout is None:
+            timeout = WORKER_FORCE_KILL_WAIT_SECONDS
+
         cls._reconcile_session_registry(session_id)
+
+        if cls._session_has_live_worker(session_id):
+            print(
+                f"[SessionManager] ensure_worker_stopped: live worker active for "
+                f"{session_id} — refusing to terminate"
+            )
+            return False
+
         cleared = cls._terminate_session_worker(session_id, timeout)
         if not cleared:
             print(f"[SessionManager] ensure_worker_stopped: worker still alive for {session_id}")
@@ -1406,7 +1458,7 @@ class SessionManager:
         stopped = cls.stop_session(session_id)
         cls._cleanup_worker(session_id)
         if stopped:
-            fully_stopped = cls.ensure_worker_stopped(session_id, timeout=90)
+            fully_stopped = cls.ensure_worker_stopped(session_id)
             if not fully_stopped:
                 print(f"[SessionManager] Simulation worker for {session_id} did not exit in time")
                 cls.fail_stop_job(session_id, "Worker did not exit in time")
