@@ -1494,6 +1494,7 @@ class AutoTrader:
             f"realized={exit_doc.get('realized_pnl')} unrealized={exit_doc.get('unrealized_pnl')} "
             f"trading_log_cycle={exit_doc.get('display_cycle')}"
         )
+        self._track_engine_fill(symbol, broker_pos, ctx)
         return exit_doc
 
     def _notify_eod_exit_status_to_api(self, reason: str = "MARKET_CLOSE_15:00_IST") -> None:
@@ -1802,6 +1803,7 @@ class AutoTrader:
             symbol,
             fill_qty,
             ctx.get("action_type", ""),
+            side=ctx.get("side") or broker_pos.get("side") or "",
         )
 
     # ------- HANDLE FILLED -------- 
@@ -1849,7 +1851,6 @@ class AutoTrader:
                     },
                     ctx,
                 )
-                self._track_engine_fill(symbol, broker_pos, ctx)
                 return
 
             if exit_price > 0 and symbol in self.positions:
