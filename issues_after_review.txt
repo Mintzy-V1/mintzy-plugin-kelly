@@ -1,0 +1,353 @@
+# Code Review: Session-Scoped EOD Exit (`c4a9d60`)
+
+Review scope: latest commit diff only (5 source files + `__pycache__` noise ignored).
+
+---
+
+## Summary
+
+The change correctly solves the **different-symbol** case (e.g. skip HARDWYN, exit ITC). It is **not position-aware**: any allowed symbol is exited at **full broker net qty**, which can still hit manual shares on the same ticker. Several failure paths can leave session positions open while the worker treats EOD as complete.
+
+---
+
+## Issues
+
+### 1. Symbol-level filter still exits manual quantity on the same symbol
+
+**Where:** `utils/session_symbols.py` → `filter_broker_positions_for_session()`; callers in `AutoTrader._exit_all_positions_and_stop()` (all 3 trader files)
+
+**Why it's a problem:** Filtering is by symbol name only. Exit logic still uses the broker’s **total net qty** for that symbol, not session-attributed qty.
+
+**Failure scenario:** Session trades 10 ITC. Client manually buys 90 more ITC in Angel app. At EOD, ITC is in the session list → exit order is placed for **100 shares**, closing the manual portion too.
+
+**Severity:** **High**
+
+---
+
+### 2. Empty allow-list exits nothing — session positions can remain open
+
+**Where:** `utils/session_symbols.py` → `filter_broker_positions_for_session()` lines 88–90
+
+```python
+if not allowed:
+    print("[EOD] No session symbols resolved — exiting NOTHING (safe default)")
+    return []
+```
+
+**Why it's a problem:** If Redis meta is missing, `session_id` is absent, Redis read fails, and `symbol_allocations` is empty, EOD exits **zero** positions. The “safe default” protects manual positions but is unsafe for session positions.
+
+**Failure scenario:** `start_session()` Redis write fails (caught and logged, worker still starts). Worker never gets valid `symbol_allocations` (crash/restart edge). At EOD → `allowed = {}` → no exits → open session positions overnight.
+
+**Severity:** **High**
+
+---
+
+### 3. `_eod_exit_done` set before filter/exit success (`org` trader only)
+
+**Where:** `auto_trader_exposure_expansion_org.py` → `_exit_all_positions_and_stop()` — `_eod_exit_done = True` runs before `filter_broker_positions_for_session()`
+
+**Why it's a problem:** Idempotency flag is set before confirming any exit. A false-negative filter or transient broker empty response blocks all later EOD attempts (backup exit, shutdown path).
+
+**Failure scenario:** Broker `get_positions` returns `[]` briefly (API glitch). Filter returns empty → early `return True`. `_eod_exit_done` is already `True`. Backup exit at 15:01 and `shutdown()` both skip real square-off.
+
+**Severity:** **High** (strategy C only; A/B lack this lock but share the early-return pattern)
+
+---
+
+### 4. Early return skips position cleanup and final sync
+
+**Where:** All three `_exit_all_positions_and_stop()` implementations — early return when `not broker_positions` after filter
+
+**Why it's a problem:** Full exit path clears `self.positions`, runs `_sync_cash_with_broker()`, persists EOD logs. Early return skips that. Worker still stops (`stop_event.set()` in callers), but internal state can be inconsistent.
+
+**Failure scenario:** Session symbols already flat at broker, but `self.positions` still has ITC from lag. Early return → internal book not cleared → misleading PnL/RMS state in logs/alerts until process dies.
+
+**Severity:** **Medium**
+
+---
+
+### 5. Redis meta write is best-effort; worker has no guarantee meta exists
+
+**Where:** `session_manager.py` → `start_session()` — Redis `setex` in `try/except`, failure only logged
+
+**Why it's a problem:** EOD depends on Redis meta (with `symbol_allocations` fallback). No retry, no worker-side validation, no alert if meta write fails.
+
+**Failure scenario:** Redis blip at live start. Worker runs 6 hours. EOD uses fallback — usually OK, but if fallback is also empty (issue #2), silent no-exit.
+
+**Severity:** **Medium**
+
+---
+
+### 6. Redis meta stores start payload symbols, not runtime traded set
+
+**Where:** `session_manager.py` → `meta_symbols` from `symbols` at spawn; read in `get_session_symbols_from_redis()`
+
+**Why it's a problem:** Meta is fixed at worker start. If the trader later trades only a subset, or symbols are adjusted in memory without updating Redis, EOD allow-list may not match reality. Unlikely with current flow, but no sync on runtime changes.
+
+**Failure scenario:** Future feature adds dynamic symbol rotation mid-session without updating Redis meta → EOD skips newly traded symbols or includes removed ones.
+
+**Severity:** **Medium** (low probability today)
+
+---
+
+### 7. Multi-session / shared broker account — full qty exit per worker
+
+**Where:** `_get_broker_positions()` + filter in all traders
+
+**Why it's a problem:** Each worker sees the **entire account** position book. Filter only limits **which symbols** to exit, not **how much** per session. Two live sessions on the same Angel account both listing ITC will each try to exit full broker ITC qty.
+
+**Failure scenario:** Session A and B both trade ITC. At EOD both workers fire exit for full net ITC. First succeeds; second over-sells or fails with broker error.
+
+**Severity:** **Medium** (pre-existing architecture; filter does not fix it)
+
+---
+
+### 8. Breaking behavior change — default `EXIT_ONLY_SESSION_SYMBOLS=true`
+
+**Where:** `utils/session_symbols.py` → `exit_only_session_symbols_enabled()`
+
+**Why it's a problem:** Production default flips from “exit all broker positions” to “exit session symbols only.” Ops/runbooks expecting full square-off will see manual positions left open (intended), but any reliance on full account flatten is broken unless env is set.
+
+**Failure scenario:** Deploy without comms. Support expects all intraday positions closed at 3 PM. HARDWYN and other manual picks remain open → client surprise.
+
+**Severity:** **Medium** (operational / breaking change)
+
+---
+
+### 9. Duplicated Redis key construction — drift risk
+
+**Where:** `utils/session_symbols.py` → `REDIS_SESSION_PREFIX` / `session_meta_redis_key()` vs `session_manager.py` → `REDIS_KEY_PREFIX` / `_session_meta_key()`
+
+**Why it's a problem:** Same key logic in two places. If one changes, EOD reads wrong key and falls back to `symbol_allocations` (silent behavior change).
+
+**Failure scenario:** Refactor renames prefix in `session_manager` only → EOD always misses Redis meta.
+
+**Severity:** **Low**
+
+---
+
+### 10. `on_skip` alert per skipped position — notification noise
+
+**Where:** All three traders — `on_skip=lambda sym: self.alerts.notify(...)`
+
+**Why it's a problem:** One alert per skipped symbol. Account with many manual positions → alert flood at EOD.
+
+**Failure scenario:** Client holds 15 manual symbols + 3 session symbols → 15 skip alerts in seconds.
+
+**Severity:** **Low**
+
+---
+
+### 11. Swallowed exceptions in `on_skip` callback
+
+**Where:** `utils/session_symbols.py` → `filter_broker_positions_for_session()` — `except Exception: pass` around `on_skip`
+
+**Why it's a problem:** Alert/notification failures are silently dropped; harder to debug EOD issues.
+
+**Severity:** **Low**
+
+---
+
+## What looks correct
+
+| Area | Assessment |
+|------|------------|
+| Redis key format | Matches `session_manager._session_meta_key()` (`autotrader:session:{id}:meta`) |
+| Symbol normalization | Aligns with `_get_broker_positions()` (`-EQ` strip, uppercase) |
+| Empty `symbols: []` in meta | Falls back to `symbol_allocations` |
+| Sim → live handoff | Paper stop deletes meta; live `start_session` writes fresh symbols |
+| Redis client | `decode_responses=True` — `json.loads` on string is fine |
+| Performance | Single Redis `GET` at EOD — no N+1 |
+| Auth / DB / async | Not touched in this diff |
+
+---
+
+## Severity rollup
+
+| Severity | Count | Top concern |
+|----------|-------|-------------|
+| **Critical** | 0 | — |
+| **High** | 3 | Same-symbol manual qty; empty allow-list; `_eod_exit_done` before exit |
+| **Medium** | 4 | Early-return cleanup; Redis best-effort; meta staleness; multi-session |
+| **Low** | 3 | Key duplication; alert spam; swallowed errors |
+
+---
+
+## Bottom line
+
+Safe for the **original HARDWYN vs ITC** case. **Not safe** if client manually trades the **same symbol** as the session — you still exit the full broker line. Before production deploy, consider:
+
+1. Documenting the same-symbol limitation.
+2. Failing loudly (alert + don’t set `_eod_exit_done`) when `allowed` is empty but `self.positions` is non-empty.
+3. Confirming Redis meta write succeeded at worker start (or assert `symbol_allocations` is non-empty before trading).
+
+
+
+# Code Review — Current Git Diff
+
+**Scope:** Tracked diff only (`git diff`): 9 files, +418/−172 lines.  
+**Important limitation:** The diff imports new modules (`utils/eod_exit.py`, `utils/session_ledger.py`, `utils/redis_keys.py`) that are **untracked** and therefore **not in `git diff`**. Behavior of `prepare_eod_exit_plan`, `build_eod_exit_plan`, `try_begin_eod_exit`, etc. was inferred from those files because the modified traders depend on them. A partial deploy (traders without the new utils) will fail at import time.
+
+Also excluded from diff: `__pycache__/*.pyc` binary changes — should not be committed.
+
+---
+
+## Critical
+
+### 1. EOD callers ignore `False` and still stop the worker
+**File/function:** `auto_trader_exposure_expansion_org.py` / `auto_trader_exposure_expansion.py` main loop (~3716–3724, ~5190–5197); RMS threads (`_do_exit` ~991–996); `shutdown()` paths  
+**What is wrong:** `_exit_all_positions_and_stop()` can now return `False` when the exit plan is empty but the session ledger still has open qty (`prepare_eod_exit_plan` → `release_eod_exit_in_progress` → `return False`). All callers still unconditionally call `stop_event.set()` and `break` (or `finally: stop_event.set()`).  
+**Failure scenario:** Ledger says 10 ITC (engine fills tracked), broker still shows 10 ITC, but allow-list/broker map mismatch produces an empty plan. Trader stops at 15:00, `_eod_exit_done` is **not** set, positions remain open overnight, no retry loop exists.  
+**Severity:** Critical
+
+### 2. Mid-session / post-deploy ledger cold-start → positions not exited
+**File/function:** `utils/session_ledger.py` → `build_eod_exit_plan()` / `apply_fill_to_session_ledger()`; all traders `_run_eod_exit_body()`  
+**What is wrong:** Ledger is in-memory only, initialized empty on worker boot. With default `EOD_USE_SESSION_LEDGER=true`, symbols with `ledger_qty=0` but `broker_qty>0` are treated as manual and skipped. If ledger is empty, `ledger_has_open_positions()` is false, so EOD returns `mark_done_empty=True` and calls `mark_eod_exit_done()`.  
+**Failure scenario:** Live session started before deploy (or worker restarted mid-day). Broker has session ITC qty 10; ledger is empty. EOD exits **nothing**, marks done, worker stops.  
+**Severity:** Critical  
+**Note:** Cannot verify from diff alone whether a backfill path exists elsewhere.
+
+### 3. Double ledger decrement on exit fills in `auto_trader.py`
+**File/function:** `auto_trader.py` → `_handle_filled()`  
+**What is wrong:** On successful exit (`exit_price > 0 and symbol in self.positions`), `_track_engine_fill()` is called inside the `if` block **and again** unconditionally before `return` (lines ~786 and ~792 in current file).  
+**Failure scenario:** Entry 10 ITC → ledger=10. One exit fill of 10 → ledger decremented twice → 0 while broker still has qty. EOD skips as “manual qty on session symbol” or marks empty and stops without exiting.  
+**Severity:** Critical (live strategy A only; expansion traders use early `return` and do not have this duplicate)
+
+---
+
+## High
+
+### 4. Org trader EOD idempotency window widened — duplicate exit orders possible
+**File/function:** `auto_trader_exposure_expansion_org.py` → `_exit_all_positions_and_stop()`  
+**What is wrong:** Old code set `_eod_exit_done = True` **before** placing orders. New code sets it only after full success via `mark_eod_exit_done()`. Concurrent callers (15:00 loop + `shutdown()`, or 15:00 + backup path) can interleave: first gets `proceed`, second gets `busy` → `False` without retry. Worse: if first crashes after placing orders but before `mark_eod_exit_done`, a retry can place duplicate `MARKET_CLOSE_EXIT` orders.  
+**Failure scenario:** EOD places exits, process killed / exception before `mark_eod_exit_done`. Worker restarts or backup path retries → second batch of exit orders.  
+**Severity:** High
+
+### 5. `mark_eod_exit_done()` on partial / failed exits
+**File/function:** All three traders → `_run_eod_exit_body()` tail  
+**What is wrong:** `mark_eod_exit_done()` is called after the 60s wait even when `failed_exits > 0` or `pending_orders` remain (this behavior predates the diff, but the new guard makes it stickier).  
+**Failure scenario:** 2 of 3 EOD exit orders fail; trader still marks EOD done; later duplicate EOD/shutdown calls return `"done"` and skip retry; open broker positions remain.  
+**Severity:** High
+
+### 6. Live worker can start and trade without Redis meta (default)
+**File/function:** `session_manager.py` → `start_session()`  
+**What is wrong:** `EOD_STRICT_REDIS_META` defaults to `false`. On Redis save failure after 3 retries, worker is still registered and runs (only logs `CRITICAL`). EOD allow-list then depends on `symbol_allocations` + in-memory ledger + `symbols_traded`.  
+**Failure scenario:** Redis blip at live start; meta never written; mid-session symbol rotation not in allocations → EOD may skip symbols that were actually traded.  
+**Severity:** High (mitigated if prod sets `EOD_STRICT_REDIS_META=true` as planned)
+
+### 7. Breaking ops behavior: session-scoped EOD is now default path
+**File/function:** Traders switch from `filter_broker_positions_for_session()` to `prepare_eod_exit_plan()` / ledger  
+**What is wrong:** Default env (`EXIT_ONLY_SESSION_SYMBOLS=true`, `EOD_USE_SESSION_LEDGER=true`) changes EOD from “all allowed session symbols at full broker net” to “ledger-attributed qty only”.  
+**Failure scenario:** Client expects full flatten of all symbols in config; manual add-on qty on same symbol is intentionally skipped — but pre-existing session positions after deploy are also skipped (see Critical #2).  
+**Severity:** High (intentional, but production-breaking if not communicated / fresh session not started)
+
+---
+
+## Medium
+
+### 8. `exit_status` published before exit plan validation (org trader)
+**File/function:** `auto_trader_exposure_expansion_org.py` → `_run_eod_exit_body()`  
+**What is wrong:** `_notify_eod_exit_status_to_api()` runs before `prepare_eod_exit_plan()`. API/Redis can show “EOD initiated” even when plan is empty and worker later returns `False` and stops.  
+**Failure scenario:** UI shows EOD in progress / complete while broker positions remain; ops assumes square-off happened.  
+**Severity:** Medium
+
+### 9. `session_cleanup_keys()` now deletes `order_ids` and `symbols_traded`
+**File/function:** `session_manager.py` → `_delete_session_redis_keys()` via `session_cleanup_keys()` (defined in untracked `utils/redis_keys.py`)  
+**What is wrong:** Session teardown deletes more Redis state than before (previously only pid + meta).  
+**Failure scenario:** Sim stop → live handoff on same `session_id` within TTL window: traded-symbol set and order-id audit trail cleared. Live worker rebuilds from scratch — OK if same day restart is unsupported; problematic if anything still reads those keys cross-process.  
+**Severity:** Medium (cannot fully verify consumers from diff alone)
+
+### 10. `FLIP_TO_LONG` / `FLIP_TO_SHORT` classified as exits in ledger only
+**File/function:** `utils/session_ledger.py` → `EXIT_ACTIONS`; `auto_trader_exposure_expansion*.py` → `_handle_filled()`  
+**What is wrong:** Flip actions are in `EXIT_ACTIONS` (subtract qty) but flip handling in `_handle_filled` may not always record the entry leg in the same callback.  
+**Failure scenario:** Flip fill decrements ledger without incrementing new side; EOD under-exits or marks empty incorrectly.  
+**Severity:** Medium (cannot verify full flip flow from diff alone)
+
+### 11. `TREND_VETO_EXIT_*` not in `EXIT_ACTIONS`
+**File/function:** `auto_trader.py` → `_handle_filled()` exit set; `utils/session_ledger.py` → `EXIT_ACTIONS`  
+**What is wrong:** Veto exits update `self.positions` but do not decrement `_session_open_qty` (action not in `EXIT_ACTIONS`).  
+**Failure scenario:** Veto exit closes position; ledger still shows open qty; EOD attempts to exit again (capped by `min(ledger, broker)` — may be harmless if broker flat, but ledger state wrong).  
+**Severity:** Medium (strategy A only)
+
+### 12. Empty live allocations: worker exits early, parent already registered
+**File/function:** `session_manager.py` → `_trader_worker()`  
+**What is wrong:** New guard returns before `trader.start()`, but `start_session()` already called `process.start()` and registered `WorkerProcess`. Cleanup relies on monitor seeing dead process.  
+**Failure scenario:** API gets success from `start_session` briefly; worker dies; short window where session looks active; error only logged on health queue (`status: error`), not re-raised to API caller.  
+**Severity:** Medium
+
+### 13. Redis meta written after worker starts (race)
+**File/function:** `session_manager.py` → `start_session()`  
+**What is wrong:** `process.start()` runs before Redis `setex` retry loop. Worker can boot and log `log_eod_config()` before meta exists.  
+**Failure scenario:** Very fast EOD edge (or test) before meta write completes; allow-list falls back to allocations only. Pre-existing pattern, still relevant for new EOD strictness.  
+**Severity:** Medium
+
+### 14. `finalize_eod_shutdown(sync_broker=True)` on empty safe path only
+**File/function:** All traders → `_run_eod_exit_body()` empty-plan branch  
+**What is wrong:** Safe-empty path syncs broker; success path syncs manually then `finalize_eod_shutdown(sync_broker=False)`. Asymmetric but probably OK. If empty path is taken incorrectly (Critical #2), sync gives false confidence that books match broker.  
+**Severity:** Medium
+
+---
+
+## Low
+
+### 15. Inline imports in hot API paths
+**File/function:** `api_server.py` → `get_live_pnl()`, `drain_rms_exited_symbols()`, `sync_exit_status_from_redis()`  
+**What is wrong:** `from utils.redis_keys import ...` inside functions on every call.  
+**Failure scenario:** Minor overhead under high polling of live PnL; no functional bug.  
+**Severity:** Low
+
+### 16. `exit_result_key()` normalizes symbol (`-EQ` stripped)
+**File/function:** `session_manager.py` worker + `request_single_exit()`; `utils/redis_keys.py`  
+**What is wrong:** Keys change from `...:ITC-EQ` to `...:ITC` if symbol ever carried suffix.  
+**Failure scenario:** In-flight manual exit during rolling deploy with mixed old/new code could miss result key. Both sides updated in same diff — OK if deployed atomically.  
+**Severity:** Low
+
+### 17. `symbols_traded` not recorded when `EOD_USE_SESSION_LEDGER=false`
+**File/function:** `utils/session_ledger.py` → `apply_fill_to_session_ledger()` early return before `record_symbol_traded()`  
+**What is wrong:** Disabling ledger also disables runtime symbol accumulation.  
+**Failure scenario:** Ops sets `EOD_USE_SESSION_LEDGER=false` expecting legacy broker-net exit; symbols traded off-allocation still won’t be added to allow-list.  
+**Severity:** Low
+
+### 18. Duplicate Redis key constants remain in `session_manager.py`
+**File/function:** `session_manager.py` lines 37–41 vs `utils/redis_keys` imports  
+**What is wrong:** `SIMULATION_STOP_PREFIX` etc. duplicated; migration incomplete.  
+**Failure scenario:** Future edit to one copy only → key drift.  
+**Severity:** Low
+
+---
+
+## Architecture / Flow Impact
+
+| Flow | Impact | Notes |
+|------|--------|-------|
+| **Start/stop simulation** | Low–Medium | Redis key helpers only; `session_cleanup_keys` deletes more keys on stop. Sim stop flag path unchanged. |
+| **Simulation → live** | Medium | Paper worker teardown clears `symbols_traded` / `order_ids`. New live worker gets fresh ledger (empty) — **must start new session day** or risk Critical #2. |
+| **Start/stop live** | High | Redis meta retry + optional strict kill; empty-allocation guard; meta-after-start race. |
+| **RMS exits** | High | RMS portfolio exit threads call `_exit_all_positions_and_stop()` then **always** `stop_event.set()` even on `False`. Per-ticker RMS (`exit_single_position`) unchanged. `rms_exited` / `live_pnl` keys unchanged semantically. |
+| **Pyramid logic** | Low | `pyramid_result_key()` migration only; handoff flow not otherwise altered in diff. |
+| **Positions/orders** | Critical | Ledger tracking on fills; double-count bug in `auto_trader.py`; EOD qty now `min(ledger, broker)`. |
+| **PnL / live-PnL** | Low | `live_pnl_key()` only; payload unchanged. |
+| **Redis/DB state** | Medium–High | New keys (`:order_ids`, `:symbols_traded`); expanded cleanup; meta reliability changes. |
+| **Background workers** | Medium | EOD idempotency `_eod_exit_in_progress` / `busy`; callers don’t retry. Health monitor handles dead worker from allocation error. |
+
+### Simulation/live mixing
+- Ledger is per-worker in-memory; not persisted to Redis (only `symbols_traded` set and `order_ids`). Sim→live on same `session_id` without a fresh session loses ledger continuity → **high risk of under-exit at EOD**.
+- Org trader no longer marks EOD done before orders complete → better for retry semantics in theory, worse if callers don’t honor `False` (they don’t).
+
+---
+
+## What cannot be verified from the diff alone
+
+1. Full behavior of **untracked** `utils/eod_exit.py`, `utils/session_ledger.py`, `utils/redis_keys.py` (review used working-tree copies).
+2. Whether API layer treats `start_session` return value / health `error` as failure to the client.
+3. Full flip / partial-fill / reconciliation interaction with `_track_engine_fill`.
+4. Whether production `.env` already sets `EOD_STRICT_REDIS_META=true`.
+5. Callers of `filter_broker_positions_for_session()` outside EOD (still in codebase, unchanged in diff).
+
+---
+
+## Summary
+
+The diff implements an important safety improvement (session-scoped, ledger-capped EOD) but introduces **three critical production risks**: (1) EOD failure paths still stop the worker, (2) empty ledger after restart/deploy can skip all exits while marking EOD complete, and (3) double ledger decrement on exits in `auto_trader.py`. The org trader idempotency change is a net improvement only if all callers respect return values and retries — they currently do not.
+
+**Recommended before prod:** fix the double `_track_engine_fill` in `auto_trader.py`; make EOD callers loop or block shutdown when `_exit_all_positions_and_stop()` returns `False`; require fresh live session after deploy; set `EOD_STRICT_REDIS_META=true` on VMs.

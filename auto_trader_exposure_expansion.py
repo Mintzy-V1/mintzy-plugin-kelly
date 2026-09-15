@@ -1691,6 +1691,7 @@ class AutoTrader:
             symbol,
             fill_qty,
             ctx.get("action_type", ""),
+            side=ctx.get("side") or broker_pos.get("side") or "",
         )
 
     # ------- HANDLE FILLED -------- 

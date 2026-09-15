@@ -86,52 +86,57 @@ def ledger_has_open_positions(trader) -> bool:
     return any(int(q or 0) != 0 for q in get_session_ledger(trader).values())
 
 
-def _compute_ledger_qty_after_fill(current: int, fill_qty: int, action_type: str) -> int:
+_BUY_FILL_ACTIONS = frozenset({
+    "OPEN_LONG",
+    "EXPAND_LONG",
+    "FLIP_TO_LONG",
+    "COVER_SHORT",
+    "TREND_VETO_EXIT_SHORT",
+})
+_SELL_FILL_ACTIONS = frozenset({
+    "OPEN_SHORT",
+    "EXPAND_SHORT",
+    "FLIP_TO_SHORT",
+    "EXIT_LONG",
+    "TREND_VETO_EXIT_LONG",
+    "SINGLE_EXIT",
+})
+
+
+def _signed_fill_delta(fill: int, side: str, action_type: str) -> Optional[int]:
+    """BUY adds, SELL subtracts. Action used only if side is missing."""
+    order_side = (side or "").upper()
+    if order_side in {"BUY", "B"}:
+        return fill
+    if order_side in {"SELL", "S"}:
+        return -fill
+
+    action = (action_type or "").upper()
+    if action in _BUY_FILL_ACTIONS:
+        return fill
+    if action in _SELL_FILL_ACTIONS:
+        return -fill
+    return None
+
+
+def _compute_ledger_qty_after_fill(
+    current: int,
+    fill_qty: int,
+    action_type: str,
+    side: str = "",
+) -> Optional[int]:
     """
     Signed session ledger: positive = long, negative = short, zero = flat.
 
-    Flip orders sell/buy 2x open qty; ledger must reflect the reversed net side.
+    One rule: BUY += fill, SELL -= fill. Flip is just a 2x fill of that side.
     """
-    action = (action_type or "").upper()
     fill = max(int(fill_qty or 0), 0)
     if fill <= 0:
         return current
-
-    if action == "FLIP_TO_SHORT":
-        prior_long = max(current, 0)
-        if prior_long <= 0:
-            return -fill
-        if fill >= 2 * prior_long:
-            return prior_long - fill
-        return -prior_long
-
-    if action == "FLIP_TO_LONG":
-        prior_short = abs(min(current, 0))
-        if prior_short <= 0:
-            return fill
-        if fill >= 2 * prior_short:
-            return current + fill
-        return prior_short
-
-    if action in {
-        "EXIT_LONG",
-        "STOP_LOSS",
-        "MARKET_CLOSE_EXIT",
-        "RMS_TICKER_EXIT",
-        "PORTFOLIO_RMS_EXIT",
-        "MANUAL_EXIT",
-        "TREND_VETO_EXIT_LONG",
-        "SINGLE_EXIT",
-    }:
-        return current - fill
-
-    if action in {"COVER_SHORT", "TREND_VETO_EXIT_SHORT"}:
-        return current + fill
-
-    if action in {"OPEN_SHORT", "EXPAND_SHORT"}:
-        return current - fill
-
-    return current + fill
+    delta = _signed_fill_delta(fill, side, action_type)
+    if delta is None:
+        return None
+    return current + delta
 
 
 def apply_fill_to_session_ledger(
@@ -139,6 +144,7 @@ def apply_fill_to_session_ledger(
     symbol: str,
     qty: int,
     action_type: str,
+    side: str = "",
 ) -> None:
     """Update engine-only ledger on confirmed fills (never from broker sync)."""
     if not eod_use_session_ledger_enabled():
@@ -158,14 +164,20 @@ def apply_fill_to_session_ledger(
         if ledger is None:
             return
         current = int(ledger.get(sym, 0) or 0)
-        new_qty = _compute_ledger_qty_after_fill(current, fill_qty, action_type)
+        new_qty = _compute_ledger_qty_after_fill(current, fill_qty, action_type, side)
+        if new_qty is None:
+            print(
+                f"[SESSION-LEDGER] {sym} action={action_type} side={side or '-'} "
+                f"fill={fill_qty} skipped — unknown fill side"
+            )
+            return
         if new_qty == 0:
             ledger.pop(sym, None)
         else:
             ledger[sym] = new_qty
         print(
-            f"[SESSION-LEDGER] {sym} action={action_type} fill={fill_qty} "
-            f"before={current} after={new_qty}"
+            f"[SESSION-LEDGER] {sym} action={action_type} side={side or '-'} "
+            f"fill={fill_qty} before={current} after={new_qty}"
         )
 
     session_id = get_trader_session_id(trader)
