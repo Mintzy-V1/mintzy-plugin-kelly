@@ -2537,12 +2537,38 @@ class AutoTrader:
                 self._broker_positions_cache = self._get_broker_positions()
                 broker_positions = list(self._broker_positions_cache or [])
 
-            # 2) Find the target symbol
+            # 2) Find the target symbol (normalize; engine book if Angel list lags)
             target_pos = None
             for pos in broker_positions:
-                if pos["symbol"] == symbol:
+                if self._normalize_config_symbol(pos.get("symbol")) == symbol:
                     target_pos = pos
                     break
+
+            if not target_pos:
+                with self.positions_lock:
+                    internal = dict(self.positions.get(symbol) or {})
+                qty_int = int(internal.get("qty") or 0)
+                side_int = internal.get("side")
+                if qty_int > 0 and side_int in ("BUY", "SELL"):
+                    ltp = 0.0
+                    with self.live_pnl_lock:
+                        tick = (self.live_pnl or {}).get(symbol) or {}
+                        ltp = float(tick.get("ltp") or 0.0)
+                    if ltp <= 0:
+                        ltp = float((getattr(self, "_cycle_ltp_cache", {}) or {}).get(symbol) or 0.0)
+                    if ltp <= 0:
+                        ltp = float(internal.get("entry_price") or 0.0)
+                    target_pos = {
+                        "symbol": symbol,
+                        "side": side_int,
+                        "qty": qty_int,
+                        "ltp": ltp,
+                        "avg_price": float(internal.get("entry_price") or 0.0),
+                    }
+                    print(
+                        f"[SINGLE EXIT] {symbol}: broker list miss — using engine "
+                        f"{side_int} {qty_int}"
+                    )
 
             if not target_pos:
                 msg = f"No open position found for {symbol}"
@@ -2611,6 +2637,7 @@ class AutoTrader:
                         },
                         exit_ctx,
                     )
+                    self._exited_symbols.add(symbol)
                     msg = f"Exit order filled for {symbol} (closed {side} position, qty={qty})"
                     print(f"[SINGLE EXIT] {msg}")
                     return {"success": True, "symbol": symbol, "message": msg, "order_id": result.order_id}
@@ -3259,6 +3286,24 @@ class AutoTrader:
     def _normalize_config_symbol(symbol: str) -> str:
         return (symbol or "").upper().replace("-EQ", "").strip()
 
+    def _strip_exited_from_active(self, symbols: list, batch_size: int):
+        """Drop stop-lock / manual exits from this loop's symbol list. No I/O wait."""
+        self._sync_exited_symbols_from_db()
+        if not self._exited_symbols:
+            return symbols, [symbols[i:i + batch_size] for i in range(0, len(symbols), batch_size)]
+        before_count = len(symbols)
+        symbols = [
+            s for s in symbols
+            if self._normalize_config_symbol(s) not in self._exited_symbols
+        ]
+        symbol_batches = [symbols[i:i + batch_size] for i in range(0, len(symbols), batch_size)]
+        if len(symbols) < before_count:
+            print(
+                f"[SINGLE EXIT] Removed {sorted(self._exited_symbols)} from active symbols. "
+                f"Remaining: {symbols}"
+            )
+        return symbols, symbol_batches
+
     def _get_symbol_position_qty(self, symbol: str) -> int:
         symbol = self._normalize_config_symbol(symbol)
         with self.positions_lock:
@@ -3683,20 +3728,7 @@ class AutoTrader:
                     break    
 
                 # ==================== FILTER EXITED SYMBOLS ====================
-                # If any symbols were manually exited, remove them from the active list
-                self._sync_exited_symbols_from_db()
-                if self._exited_symbols:
-                    before_count = len(symbols)
-                    symbols = [
-                        s for s in symbols
-                        if self._normalize_config_symbol(s) not in self._exited_symbols
-                    ]
-                    symbol_batches = [symbols[i:i + batch_size] for i in range(0, len(symbols), batch_size)]
-                    removed = self._exited_symbols.copy()
-                    # Don't clear _exited_symbols Ã¢â‚¬â€ keep them excluded permanently
-                    if len(symbols) < before_count:
-                        print(f"[SINGLE EXIT] Removed {removed} from active symbols. Remaining: {symbols}")
-                
+                symbols, symbol_batches = self._strip_exited_from_active(symbols, batch_size)
                 if not symbols:
                     print("[AUTO_TRADER] All symbols have been exited Ã¢â‚¬â€ no more symbols to trade. Stopping.")
                     self.stop_event.set()
@@ -3712,6 +3744,12 @@ class AutoTrader:
                 if not self._stoplock_done and now.time() >= STOP_LOCK_TIME:
                     self._run_stoplock_exits(symbols)
                     self._stoplock_done = True
+                    # Same 14:16 wake — drop losers before this candle's prediction.
+                    symbols, symbol_batches = self._strip_exited_from_active(symbols, batch_size)
+                    if not symbols:
+                        print("[AUTO_TRADER] All symbols exited at stop-lock — stopping.")
+                        self.stop_event.set()
+                        break
 
                 #temp change 
                 if now.time() >= MARKET_EXIT_WARN_TIME and not self._exit_warning_sent:
@@ -4002,7 +4040,11 @@ class AutoTrader:
                 for sym, info in signals.items():
                     t_sym_loop = time.time()
                     symbol_action_taken = False
-                    try:   
+                    try:
+                        if self._normalize_config_symbol(sym) in self._exited_symbols:
+                            print(f"[SKIP] {sym}: stop-lock/exited — no new order this candle")
+                            continue
+
                         has_broker_pos = False
                         broker_pos = None
                         
