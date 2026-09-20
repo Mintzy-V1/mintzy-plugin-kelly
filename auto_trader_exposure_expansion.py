@@ -1685,7 +1685,7 @@ class AutoTrader:
     
     def _track_engine_fill(self, symbol, broker_pos, ctx) -> None:
         record_engine_order_for_trader(self, ctx.get("order_id"))
-        fill_qty = int(ctx.get("qty") or broker_pos.get("qty", 0) or 0)
+        fill_qty = int(broker_pos.get("qty") or ctx.get("qty") or 0)
         apply_fill_to_session_ledger(
             self,
             symbol,
