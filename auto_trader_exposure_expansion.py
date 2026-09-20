@@ -1683,6 +1683,32 @@ class AutoTrader:
             print(f"[FILL PRICE ERROR] {symbol}: {e}")
             return 0.0
     
+    def _get_filled_qty_from_orderbook(self, order_id, symbol):
+        try:
+            with self._paper_lock:
+                order = self._paper_orders.get(str(order_id))
+            if not order:
+                print(f"[FILL QTY] {symbol}: order {order_id} not found in paper book")
+                return 0
+
+            order_status = str(order.get("status") or order.get("orderstatus") or "").lower()
+            if order_status in ("cancelled", "rejected"):
+                print(f"[FILL QTY] {symbol}: order {order_id} {order_status}")
+                return 0
+            if order_status not in ("complete", "filled"):
+                print(f"[FILL QTY] {symbol}: order {order_id} still {order_status}")
+                return 0
+
+            filled_shares = int(order.get("filled_qty") or order.get("filledshares") or 0)
+            if filled_shares > 0:
+                print(f"[FILL QTY] {symbol}: paper fill ({filled_shares} shares)")
+                return filled_shares
+            print(f"[FILL QTY] {symbol}: paper order complete but qty missing")
+            return 0
+        except Exception as e:
+            print(f"[FILL QTY ERROR] {symbol}: {e}")
+            return 0
+    
     def _track_engine_fill(self, symbol, broker_pos, ctx) -> None:
         record_engine_order_for_trader(self, ctx.get("order_id"))
         fill_qty = int(broker_pos.get("qty") or ctx.get("qty") or 0)
@@ -4464,7 +4490,9 @@ class AutoTrader:
 
                     if pos:
                         # ---- FILLED (or partially filled) ----
-                        filled_qty = min(broker_qty, expected_qty)
+                        filled_qty = self._get_filled_qty_from_orderbook(order_id, sym)
+                        if filled_qty <= 0:
+                            filled_qty = min(broker_qty, expected_qty)
                         avg_price = float(pos.get("avg_price") or 0.0)
 
                         if avg_price <= 0 and order_id:
