@@ -23,6 +23,7 @@ import traceback
 from trading_snapshot import insert_trading_snapshot
 from utils.session_ledger import (
     apply_fill_to_session_ledger,
+    ledger_capped_exit_qty,
     record_engine_order_for_trader,
 )
 from utils.eod_exit import (
@@ -2610,7 +2611,7 @@ class AutoTrader:
                 return {"success": False, "symbol": symbol, "message": msg}
 
             side = target_pos["side"]
-            qty = target_pos["qty"]
+            qty = ledger_capped_exit_qty(self, symbol, target_pos["qty"])
             curr_price = target_pos.get("ltp", 0.0)
             exit_side = "SELL" if side == "BUY" else "BUY"
             exit_reason = exit_reason or ("STOP_LOCK_EXIT" if log_signal == "STOP_LOCK" else "MANUAL_EXIT")
@@ -4137,7 +4138,7 @@ class AutoTrader:
                             sl_pct = self.symbol_allocations[sym].get("stop_loss")
                             if sl_pct is not None and sl_pct > 0:
                                 entry_price = broker_pos["avg_price"]
-                                qty = broker_pos["qty"]
+                                qty = ledger_capped_exit_qty(self, sym, broker_pos["qty"])
                                 position_side = broker_pos["side"]
                                 if entry_price <= 0 or qty <= 0 or not position_side:
                                     continue
@@ -4362,7 +4363,7 @@ class AutoTrader:
                         # SCENARIO 3: EXIT LONG & REVERSE TO SHORT
                         if sig == "SELL" and has_broker_pos and broker_pos["side"] == "BUY" and sym not in self.pending_orders:
                             scenario_name = "SELL (Flip Long to Short)"
-                            qty = broker_pos["qty"]
+                            qty = ledger_capped_exit_qty(self, sym, broker_pos["qty"])
                             inverted_qty = qty*2                 # EXIT LONG -> OPEN SHORT (same qty)
                             print(f"[ORDER QUEUED] {sym} {sig} qty={qty}")
 
@@ -4388,7 +4389,7 @@ class AutoTrader:
                         # SCENARIO 4: EXIT SHORT & REVERSE TO LONG
                         if sig == "BUY" and has_broker_pos and broker_pos["side"] == "SELL" and sym not in self.pending_orders:
                             scenario_name = "BUY (Flip Short to Long)"
-                            qty = broker_pos["qty"]
+                            qty = ledger_capped_exit_qty(self, sym, broker_pos["qty"])
                             inverted_qty = qty*2                # EXIT SHORT -> OPEN LONG (same qty)
                             print(f"[ORDER QUEUED] {sym} {sig} qty={qty}")
                     

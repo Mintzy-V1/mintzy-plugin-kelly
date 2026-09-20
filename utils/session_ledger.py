@@ -86,6 +86,25 @@ def ledger_has_open_positions(trader) -> bool:
     return any(int(q or 0) != 0 for q in get_session_ledger(trader).values())
 
 
+def ledger_capped_exit_qty(trader, symbol: str, broker_qty: int) -> int:
+    """
+    min(|own_ledger_qty|, broker_qty) — never exit more than we opened,
+    never exit more than the broker actually holds. Falls back to broker_qty
+    when the ledger is empty (paper mode / feature disabled) so old behavior
+    is preserved.
+    """
+    broker_qty = max(int(broker_qty or 0), 0)
+    if broker_qty <= 0:
+        return 0
+    sym = normalize_symbol(symbol)
+    if not sym:
+        return broker_qty
+    ledger_qty = int(get_session_ledger(trader).get(sym, 0) or 0)
+    if ledger_qty == 0:
+        return broker_qty
+    return min(abs(ledger_qty), broker_qty)
+
+
 _BUY_FILL_ACTIONS = frozenset({
     "OPEN_LONG",
     "EXPAND_LONG",
