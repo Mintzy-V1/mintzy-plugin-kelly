@@ -12,6 +12,7 @@ env/
 # Local environment & secrets
 .env
 .env.*
+utils/upstox_token.json
 
 # IDE / OS
 .idea/
