@@ -1,0 +1,45 @@
+name: Deploy to VM
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy code to VM
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          VM_USER: ${{ secrets.VM_USER }}
+          VM_SSH_KEY: ${{ secrets.VM_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "$VM_SSH_KEY" > ~/.ssh/vm_key
+          chmod 600 ~/.ssh/vm_key
+          sudo apt-get update -qq >/dev/null && sudo apt-get install -y -qq rsync >/dev/null
+          rsync -az -e "ssh -i ~/.ssh/vm_key -o StrictHostKeyChecking=no" \
+            --exclude '.git' --exclude 'venv' --exclude '__pycache__' \
+            --exclude '.env' --exclude 'logs' --exclude '*.log' \
+            --exclude '*.csv' --exclude 'server.log' \
+            --exclude 'NSE.json' --exclude 'Futures_ticker.json' \
+            --exclude 'Options_ticker.json' --exclude 'ticker.json' \
+            --exclude 'utils/upstox_token.json' --exclude 'screen*' \
+            --exclude 'hope_logs.txt' --exclude 'final_tradebook*' \
+            ./ "$VM_USER@$VM_HOST:/home/admin/mintzy-plugin/"
+
+      - name: Restart service
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          VM_USER: ${{ secrets.VM_USER }}
+          VM_SSH_KEY: ${{ secrets.VM_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          printf '%s\n' "$VM_SSH_KEY" > ~/.ssh/vm_key
+          chmod 600 ~/.ssh/vm_key
+          ssh -i ~/.ssh/vm_key -o StrictHostKeyChecking=no \
+            "$VM_USER@$VM_HOST" "bash /home/admin/mintzy-plugin/scripts/restart_server.sh"
