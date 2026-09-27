@@ -103,7 +103,7 @@ MARKET_TZ = timezone(timedelta(hours=5, minutes=30))
 MARKET_EXIT_TIME = dt_time(15, 0)       # 3:00 PM IST — exit all open positions
 MARKET_EXIT_WARN_TIME = dt_time(14, 55) # 2:55 PM IST — warning before auto exit
 
-# 14:15 IST stop-lock — exit losers, continue with green symbols
+# 14:15 IST stop-lock — after the candle cycle, exit losers, continue with green symbols
 STOP_LOCK_TIME = dt_time(14, 15)
 
 
@@ -3377,8 +3377,23 @@ class AutoTrader:
                         return float(self._calculate_pnl(symbol, ltp))
         return 0.0
 
+    def _maybe_run_stoplock_after_cycle(self, symbols, symbol_batches, batch_size):
+        """After a candle cycle (or empty prediction), exit losers if clock is >= 14:15."""
+        now = self._now_market_time()
+        if self._stoplock_done or now.time() < STOP_LOCK_TIME:
+            return symbols, symbol_batches, False
+
+        self._run_stoplock_exits(symbols)
+        self._stoplock_done = True
+        symbols, symbol_batches = self._strip_exited_from_active(symbols, batch_size)
+        if not symbols:
+            print("[AUTO_TRADER] All symbols exited at stop-lock — stopping.")
+            self.stop_event.set()
+            return symbols, symbol_batches, True
+        return symbols, symbol_batches, False
+
     def _run_stoplock_exits(self, active_symbols: list) -> None:
-        """At 14:15 IST exit open symbols with unrealized_pnl < 0; continue with the rest."""
+        """After the 14:15 IST candle cycle, exit open symbols with unrealized_pnl < 0."""
         now = self._now_market_time()
         print(
             f"[STOPLOCK] Check at {now.strftime('%Y-%m-%d %H:%M:%S')} IST "
@@ -3778,16 +3793,6 @@ class AutoTrader:
                 # =====================================================
                 now = self._now_market_time()
 
-                if not self._stoplock_done and now.time() >= STOP_LOCK_TIME:
-                    self._run_stoplock_exits(symbols)
-                    self._stoplock_done = True
-                    # Same 14:16 wake — drop losers before this candle's prediction.
-                    symbols, symbol_batches = self._strip_exited_from_active(symbols, batch_size)
-                    if not symbols:
-                        print("[AUTO_TRADER] All symbols exited at stop-lock — stopping.")
-                        self.stop_event.set()
-                        break
-
                 #temp change 
                 if now.time() >= MARKET_EXIT_WARN_TIME and not self._exit_warning_sent:
                     msg = "2:55 PM IST - Market closing in 5 minutes. All positions will be exited at 3:00 PM IST."
@@ -3950,6 +3955,12 @@ class AutoTrader:
                     self.alerts.notify("No valid prediction data returned; retrying next cycle...")
                     print("calling sleep_until_next_candle")
                     self.tlog.record("PREDICTION_BATCH_TOTAL", t_pred_start, note="EMPTY_RESULT")
+
+                    symbols, symbol_batches, stoplock_stop = self._maybe_run_stoplock_after_cycle(
+                        symbols, symbol_batches, batch_size
+                    )
+                    if stoplock_stop:
+                        break
 
                     self._sleep_until_next_candle(candle)
                     continue
@@ -4871,6 +4882,13 @@ class AutoTrader:
                         f"[TIMING WARNING] Cycle took {total_cycle_sec:.1f}s / budget {candle_budget_sec}s "
                         f"({100*total_cycle_sec/candle_budget_sec:.0f}%)  RISK OF CANDLE SKIP!"
                     )
+
+                # 14:15 stop-lock after this candle's prediction/orders, before sleep / 15:00 backup.
+                symbols, symbol_batches, stoplock_stop = self._maybe_run_stoplock_after_cycle(
+                    symbols, symbol_batches, batch_size
+                )
+                if stoplock_stop:
+                    break
 
                 # ==============================
                 # BACKUP EXIT AT 3:00 PM IST (end-of-cycle safety net)
