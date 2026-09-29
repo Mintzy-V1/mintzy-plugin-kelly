@@ -376,6 +376,9 @@ class BrokerConnector:
         t = tradingsymbol.upper()
         if not t.endswith("-EQ"):
             t = f"{t}-EQ"
+        # NSE renamed LTIM -> LTM (27 Feb 2026)
+        if t == "LTIM-EQ":
+            t = "LTM-EQ"
 
         instruments = self._load_instruments()
         if not instruments:
@@ -392,6 +395,8 @@ class BrokerConnector:
             item.get("trading_symbol") or
             item.get("symbol") or ""
             ).upper()
+            if asset == "LTIM-EQ":
+                asset = "LTM-EQ"
 
             if asset == t:
                 token = (
