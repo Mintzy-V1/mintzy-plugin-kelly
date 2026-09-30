@@ -23,6 +23,7 @@ import traceback
 from trading_snapshot import insert_trading_snapshot
 from utils.session_ledger import (
     apply_fill_to_session_ledger,
+    get_session_ledger,
     ledger_capped_exit_qty,
     record_engine_order_for_trader,
 )
@@ -105,6 +106,24 @@ MARKET_EXIT_WARN_TIME = dt_time(14, 55) # 2:55 PM IST — warning before auto ex
 
 # 14:15 IST stop-lock — after the candle cycle, exit losers, continue with green symbols
 STOP_LOCK_TIME = dt_time(14, 15)
+# Settle pending entry/expand before stop-lock exit; wait for exit fills before worker stop
+STOPLOCK_PENDING_SETTLE_SEC = 30
+STOPLOCK_EXIT_WAIT_SEC = 90
+STOPLOCK_RETRY_MAX = 2
+STOPLOCK_ENTRY_PENDING_ACTIONS = frozenset({
+    "OPEN_LONG",
+    "OPEN_SHORT",
+    "EXPAND_LONG",
+    "EXPAND_SHORT",
+    "FLIP_TO_LONG",
+    "FLIP_TO_SHORT",
+})
+STOPLOCK_EXIT_PENDING_ACTIONS = frozenset({
+    "EXIT_LONG",
+    "COVER_SHORT",
+    "STOP_LOSS",
+    "MARKET_CLOSE_EXIT",
+})
 
 
 def load_json(path):
@@ -3377,23 +3396,304 @@ class AutoTrader:
                         return float(self._calculate_pnl(symbol, ltp))
         return 0.0
 
+    def _pending_snapshot_for_symbol(self, symbol: str) -> list:
+        symbol = self._normalize_config_symbol(symbol)
+        with self.pending_lock:
+            return list(self.pending_orders.get(symbol, []) or [])
+
+    def _symbol_has_pending(self, symbol: str) -> bool:
+        return bool(self._pending_snapshot_for_symbol(symbol))
+
+    def _refresh_broker_positions_cache(self) -> None:
+        with self.broker_pos_lock:
+            self._broker_positions_cache = self._get_broker_positions()
+
+    def _broker_open_qty_for_symbol(self, symbol: str) -> int:
+        """Live broker open qty for symbol (0 if flat / missing)."""
+        symbol = self._normalize_config_symbol(symbol)
+        self._refresh_broker_positions_cache()
+        with self.broker_pos_lock:
+            for pos in self._broker_positions_cache or []:
+                if self._normalize_config_symbol(pos.get("symbol")) == symbol:
+                    return max(int(pos.get("qty") or 0), 0)
+        return 0
+
+    def _wait_for_symbol_pending_clear(self, symbol: str, timeout_sec: float) -> bool:
+        """Let reconcile finish fills for this symbol. Returns True if pending cleared."""
+        symbol = self._normalize_config_symbol(symbol)
+        deadline = time.time() + max(float(timeout_sec), 0.0)
+        while time.time() < deadline:
+            if not self._symbol_has_pending(symbol):
+                return True
+            time.sleep(1.0)
+        return not self._symbol_has_pending(symbol)
+
+    def _wait_for_pending_orders_clear(self, timeout_sec: float, label: str = "STOPLOCK") -> bool:
+        """Block until pending_orders empty (reconcile thread still running)."""
+        timeout_sec = max(float(timeout_sec), 0.0)
+        print(f"[{label}] Waiting for pending orders to clear (max {int(timeout_sec)}s)...")
+        deadline = time.time() + timeout_sec
+        while time.time() < deadline:
+            with self.pending_lock:
+                pending_count = len(self.pending_orders)
+                pending_syms = sorted(self.pending_orders.keys())
+            if pending_count == 0:
+                print(f"[{label}] All pending orders cleared")
+                return True
+            remaining = int(max(deadline - time.time(), 0))
+            print(
+                f"[{label}] {remaining}s remaining... "
+                f"(pending: {pending_count} symbols {pending_syms})",
+                end="\r",
+            )
+            time.sleep(2.0)
+        with self.pending_lock:
+            leftover = sorted(self.pending_orders.keys())
+        if leftover:
+            print(f"\n[{label}] Warning: still pending after wait: {leftover}")
+            try:
+                self.alerts.notify(f"{label}: pending after wait — {leftover}")
+            except Exception:
+                pass
+            return False
+        print(f"\n[{label}] All pending orders cleared")
+        return True
+
+    def _cancel_pending_entry_orders_for_symbol(self, symbol: str) -> None:
+        """
+        Cancel unfilled entry/expand (not exit) pending orders so stop-lock can
+        size the exit from a settled ledger/broker qty.
+        """
+        symbol = self._normalize_config_symbol(symbol)
+        if not self._ensure_session():
+            print(f"[STOPLOCK] {symbol}: cannot cancel pending — no broker session")
+            return
+
+        for ctx in self._pending_snapshot_for_symbol(symbol):
+            action = (ctx.get("action_type") or "").upper()
+            if action in STOPLOCK_EXIT_PENDING_ACTIONS:
+                continue
+            if action and action not in STOPLOCK_ENTRY_PENDING_ACTIONS:
+                # Unknown non-exit pending — still treat as entry-side for settle
+                if action.startswith("EXIT") or action.startswith("COVER"):
+                    continue
+
+            order_id = ctx.get("order_id")
+            if not order_id:
+                try:
+                    self._release_exposure(symbol, ctx.get("order_value", 0.0))
+                except Exception:
+                    pass
+                with self.pending_lock:
+                    try:
+                        self.pending_orders[symbol].remove(ctx)
+                    except ValueError:
+                        pass
+                    if not self.pending_orders.get(symbol):
+                        self.pending_orders.pop(symbol, None)
+                continue
+
+            filled_qty = 0
+            try:
+                filled_qty = int(self._get_filled_qty_from_orderbook(order_id, symbol) or 0)
+            except Exception as e:
+                print(f"[STOPLOCK] {symbol}: fill check before cancel failed: {e}")
+
+            if filled_qty > 0:
+                print(
+                    f"[STOPLOCK] {symbol}: pending {action} {order_id} already filled "
+                    f"({filled_qty}) — leaving for reconcile"
+                )
+                continue
+
+            print(
+                f"[STOPLOCK] {symbol}: cancelling pending {action or 'ENTRY'} "
+                f"order {order_id}"
+            )
+            try:
+                resp = self.broker.cancel_order(self.session, order_id)
+                print(f"[STOPLOCK] {symbol}: cancel response={resp}")
+            except Exception as e:
+                print(f"[STOPLOCK] {symbol}: cancel failed for {order_id}: {e}")
+
+            # Re-check fill in case it completed while we cancelled
+            try:
+                filled_qty = int(self._get_filled_qty_from_orderbook(order_id, symbol) or 0)
+            except Exception:
+                filled_qty = 0
+            if filled_qty > 0:
+                print(
+                    f"[STOPLOCK] {symbol}: order {order_id} filled during cancel "
+                    f"({filled_qty}) — leaving for reconcile"
+                )
+                continue
+
+            try:
+                self._release_exposure(symbol, ctx.get("order_value", 0.0))
+            except Exception as e:
+                print(f"[STOPLOCK] {symbol}: release_exposure failed: {e}")
+            try:
+                self._handle_rejected(symbol, ctx)
+            except Exception:
+                pass
+
+            with self.pending_lock:
+                try:
+                    self.pending_orders[symbol].remove(ctx)
+                except ValueError:
+                    pass
+                if not self.pending_orders.get(symbol):
+                    self.pending_orders.pop(symbol, None)
+
+    def _settle_pending_before_stoplock_exit(self, symbol: str) -> None:
+        """Wait for pending fills; cancel leftover entry/expand; refresh broker qty."""
+        symbol = self._normalize_config_symbol(symbol)
+        pending = self._pending_snapshot_for_symbol(symbol)
+        if not pending:
+            self._refresh_broker_positions_cache()
+            return
+
+        actions = [((c.get("action_type") or "?"), c.get("order_id")) for c in pending]
+        print(
+            f"[STOPLOCK] {symbol}: settling {len(pending)} pending before exit: {actions}"
+        )
+        cleared = self._wait_for_symbol_pending_clear(symbol, STOPLOCK_PENDING_SETTLE_SEC)
+        if cleared:
+            print(f"[STOPLOCK] {symbol}: pending cleared before exit")
+        else:
+            print(
+                f"[STOPLOCK] {symbol}: pending still open after "
+                f"{STOPLOCK_PENDING_SETTLE_SEC}s — cancelling entry/expand"
+            )
+            self._cancel_pending_entry_orders_for_symbol(symbol)
+            self._wait_for_symbol_pending_clear(symbol, 10.0)
+
+        self._refresh_broker_positions_cache()
+        broker_qty = self._broker_open_qty_for_symbol(symbol)
+        ledger_qty = 0
+        try:
+            ledger_qty = int(get_session_ledger(self).get(symbol, 0) or 0)
+        except Exception:
+            ledger_qty = 0
+        print(
+            f"[STOPLOCK] {symbol}: settled view broker_qty={broker_qty} "
+            f"ledger_qty={ledger_qty}"
+        )
+
+    def _retry_stoplock_exits_if_still_open(self, symbols: list) -> list:
+        """
+        After exit orders + reconcile wait, re-exit any symbol still open on broker.
+        Returns symbols still open after retries.
+        """
+        still_open = []
+        for sym in symbols or []:
+            sym = self._normalize_config_symbol(sym)
+            if not sym:
+                continue
+
+            open_qty = self._broker_open_qty_for_symbol(sym)
+            if open_qty <= 0:
+                print(f"[STOPLOCK] {sym}: broker flat after exit wait")
+                continue
+
+            print(
+                f"[STOPLOCK] {sym}: still open on broker qty={open_qty} — retrying exit"
+            )
+            closed = False
+            for attempt in range(1, STOPLOCK_RETRY_MAX + 1):
+                # Accept-path may have marked exited; allow another live exit attempt
+                self._exited_symbols.discard(sym)
+                self._settle_pending_before_stoplock_exit(sym)
+                open_qty = self._broker_open_qty_for_symbol(sym)
+                if open_qty <= 0:
+                    closed = True
+                    self._exited_symbols.add(sym)
+                    break
+                result = self.exit_single_position(sym, log_signal="STOP_LOCK")
+                print(
+                    f"[STOPLOCK] {sym}: retry {attempt}/{STOPLOCK_RETRY_MAX} "
+                    f"success={result.get('success')} msg={result.get('message')}"
+                )
+                self._wait_for_symbol_pending_clear(sym, min(STOPLOCK_EXIT_WAIT_SEC, 45))
+                if self._broker_open_qty_for_symbol(sym) <= 0:
+                    closed = True
+                    self._exited_symbols.add(sym)
+                    break
+
+            if not closed and self._broker_open_qty_for_symbol(sym) > 0:
+                self._exited_symbols.discard(sym)
+                still_open.append(sym)
+                msg = (
+                    f"[STOPLOCK] {sym}: still open on broker after retries — "
+                    f"check Angel manually"
+                )
+                print(msg)
+                try:
+                    self.alerts.notify(msg)
+                except Exception:
+                    pass
+            else:
+                print(f"[STOPLOCK] {sym}: flat confirmed after retry")
+
+        return still_open
+
     def _maybe_run_stoplock_after_cycle(self, symbols, symbol_batches, batch_size):
         """After a candle cycle (or empty prediction), exit losers if clock is >= 14:15."""
         now = self._now_market_time()
         if self._stoplock_done or now.time() < STOP_LOCK_TIME:
             return symbols, symbol_batches, False
 
-        self._run_stoplock_exits(symbols)
+        exited = self._run_stoplock_exits(symbols)
         self._stoplock_done = True
+
+        # Do NOT stop_event yet — reconcile must keep running until exits settle.
+        if exited:
+            self._wait_for_pending_orders_clear(STOPLOCK_EXIT_WAIT_SEC, label="STOPLOCK")
+            still_open = self._retry_stoplock_exits_if_still_open(exited)
+            if still_open:
+                # Keep still-open names in the active loop for EOD backup exit
+                for sym in still_open:
+                    self._exited_symbols.discard(sym)
+                print(
+                    f"[STOPLOCK] Refusing silent stop — still open: {still_open}. "
+                    f"Worker stays up for EOD / manual handling."
+                )
+                try:
+                    self.alerts.notify(
+                        f"Stop-lock incomplete — still open: {still_open}"
+                    )
+                except Exception:
+                    pass
+                symbols, symbol_batches = self._strip_exited_from_active(symbols, batch_size)
+                return symbols, symbol_batches, False
+            # Final short drain in case retries added pending
+            self._wait_for_pending_orders_clear(30.0, label="STOPLOCK-FINAL")
+
         symbols, symbol_batches = self._strip_exited_from_active(symbols, batch_size)
         if not symbols:
-            print("[AUTO_TRADER] All symbols exited at stop-lock — stopping.")
+            pending_left = []
+            with self.pending_lock:
+                pending_left = sorted(self.pending_orders.keys())
+            if pending_left:
+                print(
+                    f"[AUTO_TRADER] Stop-lock flat on broker but pending left "
+                    f"{pending_left} — waiting once more before stop"
+                )
+                self._wait_for_pending_orders_clear(30.0, label="STOPLOCK-DRAIN")
+            print(
+                "[AUTO_TRADER] All symbols exited at stop-lock and flat confirmed — stopping."
+            )
             self.stop_event.set()
             return symbols, symbol_batches, True
         return symbols, symbol_batches, False
 
-    def _run_stoplock_exits(self, active_symbols: list) -> None:
-        """After the 14:15 IST candle cycle, exit open symbols with unrealized_pnl < 0."""
+    def _run_stoplock_exits(self, active_symbols: list) -> list:
+        """After the 14:15 IST candle cycle, exit open symbols with unrealized_pnl < 0.
+
+        Settles pending entry/expand for a symbol before sizing/sending the exit so
+        ledger/broker qty reflects fills (or cancelled expands). Returns symbols
+        for which an exit order was accepted (caller waits for flat + may retry).
+        """
         now = self._now_market_time()
         print(
             f"[STOPLOCK] Check at {now.strftime('%Y-%m-%d %H:%M:%S')} IST "
@@ -3404,8 +3704,8 @@ class AutoTrader:
             self._normalize_config_symbol(s) for s in (active_symbols or []) if s
         }
 
+        self._refresh_broker_positions_cache()
         with self.broker_pos_lock:
-            self._broker_positions_cache = self._get_broker_positions()
             for pos in self._broker_positions_cache or []:
                 sym = self._normalize_config_symbol(pos.get("symbol"))
                 if sym:
@@ -3417,31 +3717,38 @@ class AutoTrader:
             if sym_key in self._exited_symbols:
                 continue
 
+            # Pending expand/entry can hide true qty — settle before PnL decision.
+            if self._symbol_has_pending(sym_key):
+                self._settle_pending_before_stoplock_exit(sym_key)
+
             qty = self._get_symbol_position_qty(sym_key)
-            if qty == 0:
+            if qty == 0 and not self._symbol_has_pending(sym_key):
                 continuing.append(f"{sym_key}(flat)")
                 continue
 
             unrealized = self._get_symbol_unrealized_pnl(sym_key)
-            if unrealized < 0:
-                print(f"[STOPLOCK] {sym_key} unrealized={unrealized:.2f} — placing exit")
-                result = self.exit_single_position(sym_key, log_signal="STOP_LOCK")
-                if result.get("success"):
-                    exited.append(sym_key)
-                else:
-                    print(
-                        f"[STOPLOCK] {sym_key} exit failed: "
-                        f"{result.get('message', 'unknown error')}"
-                    )
-            else:
+            if unrealized >= 0:
                 continuing.append(f"{sym_key}(unrealized={unrealized:.2f})")
+                continue
+
+            print(f"[STOPLOCK] {sym_key} unrealized={unrealized:.2f} — placing exit")
+            self._settle_pending_before_stoplock_exit(sym_key)
+            result = self.exit_single_position(sym_key, log_signal="STOP_LOCK")
+            if result.get("success"):
+                exited.append(sym_key)
+            else:
+                print(
+                    f"[STOPLOCK] {sym_key} exit failed: "
+                    f"{result.get('message', 'unknown error')}"
+                )
 
         summary = (
-            f"14:15 stop-lock complete — exited: {exited or 'none'}; "
+            f"14:15 stop-lock exits sent — exited: {exited or 'none'}; "
             f"continuing: {continuing}"
         )
         print(f"[STOPLOCK] {summary}")
         self.alerts.notify(summary)
+        return exited
 
     def convert_candle_to_seconds(self, c):
         c = str(c).lower().strip()
@@ -3955,12 +4262,6 @@ class AutoTrader:
                     self.alerts.notify("No valid prediction data returned; retrying next cycle...")
                     print("calling sleep_until_next_candle")
                     self.tlog.record("PREDICTION_BATCH_TOTAL", t_pred_start, note="EMPTY_RESULT")
-
-                    symbols, symbol_batches, stoplock_stop = self._maybe_run_stoplock_after_cycle(
-                        symbols, symbol_batches, batch_size
-                    )
-                    if stoplock_stop:
-                        break
 
                     self._sleep_until_next_candle(candle)
                     continue
@@ -4882,13 +5183,6 @@ class AutoTrader:
                         f"[TIMING WARNING] Cycle took {total_cycle_sec:.1f}s / budget {candle_budget_sec}s "
                         f"({100*total_cycle_sec/candle_budget_sec:.0f}%)  RISK OF CANDLE SKIP!"
                     )
-
-                # 14:15 stop-lock after this candle's prediction/orders, before sleep / 15:00 backup.
-                symbols, symbol_batches, stoplock_stop = self._maybe_run_stoplock_after_cycle(
-                    symbols, symbol_batches, batch_size
-                )
-                if stoplock_stop:
-                    break
 
                 # ==============================
                 # BACKUP EXIT AT 3:00 PM IST (end-of-cycle safety net)
